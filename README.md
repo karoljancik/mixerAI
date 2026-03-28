@@ -1,45 +1,85 @@
 # MixerAI
 
-MixerAI is a prototype for a web application that uploads two drum and bass tracks and creates a mix-processing job.
+MixerAI is a prototype DJ mixing app for drum and bass tracks. It lets you build a personal library, drag tracks onto two decks, preview them in a studio-style UI, and generate an AI-assisted transition render.
 
-## Current stack
+## What The App Does
 
-- `src/MixerAI.Web`: ASP.NET Core MVC frontend
-- `src/MixerAI.Backend`: ASP.NET Core backend API
-- `ai/`: Python worker boundary for training and inference
+- Upload tracks into a personal library
+- Analyze uploaded tracks for BPM, Camelot key, duration, and waveform preview
+- Load tracks onto Deck A / Deck B with drag and drop
+- Preview both decks in a DJ studio interface
+- Generate a mixed MP3 from two library tracks
+- Use beat-sync, structure heuristics, and transition planning instead of a single plain crossfade
 
-## Current behavior
+## Current Architecture
 
-- The web app accepts two audio files and a mix title.
-- The backend stores uploaded files under `App_Data/MixJobs/<job-id>`.
-- The backend writes a `mix-job.json` manifest for the future Python worker.
-- The AI folder contains a first dataset-preparation path for long DJ sets without known track IDs.
+- [src/MixerAI.Web](c:/Users/Administrator/Desktop/Osobne/mixerAI/src/MixerAI.Web)
+  ASP.NET Core MVC frontend with login, library, and DJ studio UI
+- [src/MixerAI.Backend](c:/Users/Administrator/Desktop/Osobne/mixerAI/src/MixerAI.Backend)
+  ASP.NET Core backend API for auth, library storage, track analysis, and mix rendering
+- [ai](c:/Users/Administrator/Desktop/Osobne/mixerAI/ai)
+  Python analysis and rendering scripts for BPM analysis, transition planning, and audio rendering
+- [docker-compose.yml](c:/Users/Administrator/Desktop/Osobne/mixerAI/docker-compose.yml)
+  Local multi-container setup for web, backend, and PostgreSQL
 
-## Technical direction
+## Current User Flow
 
-The final AI requirement should be split into phases:
+1. Register or log in
+2. Upload tracks into the library
+3. Wait for backend analysis to finish
+4. Drag tracks from the library onto Deck A and Deck B
+5. Preview the decks in the studio UI
+6. Click `Generate Mix` to render an MP3 transition between the selected tracks
 
-1. Build a reliable upload/job/data pipeline.
-2. Add SQL Server for job, dataset and model metadata.
-3. Start with deterministic audio preprocessing and alignment.
-4. Train or fine-tune a model only after the dataset and evaluation loop are stable.
+## Mix Engine Today
 
-Full-track generation now prefers the latent-audio generator when `audio_latent_autoencoder.pt` and `latent_phrase_generator.pt` exist. If those checkpoints are missing, inference falls back to the phrase-token/procedural path instead of stitching together dataset clips at render time.
+The current render path is hybrid:
 
-Store raw DJ sets in one directory such as `data/raw_sets`. Keep style labels in metadata, not in the folder layout. Separate `deep` and `liquid` folders are optional for human organization, but the training pipeline should trust an explicit style map file instead of directory names.
+- Track analysis extracts tempo and lightweight structure information
+- The planner tries to find a musically plausible transition point
+- Track B is tempo-aligned to Track A
+- The renderer builds an overlap zone where both tracks can play together
+- Different transition styles can be chosen, such as `double_drop`, `bass_swap`, `echo_out`, or a general blend
 
-When you need style-separated files for training, export derived clips into style subfolders from the labeled manifest instead of physically splitting the original raw set archive.
+Important notes:
 
-Mixing two full commercial tracks directly with a "single trained AI model" is not a good first milestone. The right first milestone is an auditable offline pipeline with repeatable inputs and outputs.
+- The generated mix is currently heuristic-first
+- If the trained `transition_scorer.pt` checkpoint does not match the current feature set, the backend falls back to deterministic heuristics instead of failing
+- This project is still in active tuning; transition timing and EQ behavior are not considered final
 
-For long DJ sets, the lowest-manual-work training path is:
+## Studio UI Notes
 
-1. Store full sets as raw data.
-2. Slice them into fixed windows.
-3. Build weakly supervised pairs from adjacent vs distant windows.
-4. Train a transition/context scorer before attempting full mix generation.
+- Track loading in the studio is based on drag and drop from the library
+- The `CF` slider is only a live preview crossfader for deck playback in the browser
+- The `CF` slider does not change the server-rendered mix output
 
-## Run
+## Running With Docker
+
+Recommended local setup:
+
+```powershell
+docker compose up --build
+```
+
+Services:
+
+- Web: `http://localhost:5000`
+- Backend: `http://localhost:8080`
+- PostgreSQL: `localhost:5432`
+
+To run in the background:
+
+```powershell
+docker compose up --build -d
+```
+
+To stop everything:
+
+```powershell
+docker compose down
+```
+
+## Running Without Docker
 
 Backend:
 
@@ -55,23 +95,53 @@ $env:DOTNET_CLI_HOME='c:\Users\Administrator\Desktop\Osobne\mixerAI'
 dotnet run --project src/MixerAI.Web
 ```
 
-Python worker example:
+Python scripts expect:
 
-```powershell
-python ai/service.py --job src/MixerAI.Backend/App_Data/MixJobs/<job-id>/mix-job.json
-```
+- `python`
+- `ffmpeg`
+- `ffprobe`
 
-Dataset preparation example:
+## Data And Storage
 
-```powershell
-python ai/prepare_dataset.py --input-dir data/raw_sets --output-dir data/manifests
-python ai/build_training_pairs.py --manifests-dir data/manifests --output-path data/training/pairs.jsonl
-python ai/split_training_pairs.py --pairs-path data/training/pairs.jsonl --output-dir data/training
-python ai/extract_features.py --manifests-dir data/manifests --output-dir data/features
-python ai/summarize_dataset.py --manifests-dir data/manifests --features-dir data/features --pairs-path data/training/pairs.jsonl
-python ai/train_transition_model.py --pairs-path data/training/train.jsonl --validation-pairs-path data/training/validation.jsonl --features-dir data/features --epochs 40
-python ai/generation/prepare_generation_dataset.py --manifests-dir data/manifests --features-dir data/features --style-map-path ai/generation/style_map.curated.json --output-path data/training/generation_dataset.curated.jsonl
-python ai/generation/export_generation_clips.py --dataset-path data/training/generation_dataset.curated.jsonl --output-dir data/generated_clips
-python ai/generation/split_generation_dataset.py --dataset-path data/training/generation_dataset.curated.jsonl --output-dir data/training/generation_splits
-python ai/generation/train_phrase_token_generator.py --train-split-path data/training/generation_splits/train.jsonl --validation-split-path data/training/generation_splits/validation.jsonl --clips-root data/generated_clips --model-output data/training/phrase_token_generator.pt
-```
+- Uploaded library tracks are stored under backend `App_Data/UserTracks`
+- Rendered mixes are stored under backend `App_Data/RenderedMixes`
+- Docker volumes keep uploaded tracks and renders persistent across rebuilds
+- Training and model assets live under [data](c:/Users/Administrator/Desktop/Osobne/mixerAI/data)
+
+## AI / Training Direction
+
+The longer-term direction is:
+
+1. Keep the upload, library, and render pipeline stable
+2. Improve track structure analysis and DJ-style transition logic
+3. Rebuild the transition feature set so the learned model matches the live render pipeline
+4. Only then rely more heavily on trained transition scoring
+
+The project already includes:
+
+- weakly supervised transition-pair generation
+- transition scorer training scripts
+- generation dataset preparation
+- phrase and latent audio generation experiments
+
+For details, see [ai/README.md](c:/Users/Administrator/Desktop/Osobne/mixerAI/ai/README.md).
+
+## Current Limitations
+
+- Transition quality is still being tuned
+- Some heuristic choices are good on some pairs and weak on others
+- The trained transition checkpoint may be outdated relative to the current feature schema
+- The app is optimized around drum and bass assumptions, especially for BPM normalization and phrase alignment
+
+## Useful Paths
+
+- [src/MixerAI.Web/Views/Home/Index.cshtml](c:/Users/Administrator/Desktop/Osobne/mixerAI/src/MixerAI.Web/Views/Home/Index.cshtml)
+  DJ studio view
+- [src/MixerAI.Backend/Program.cs](c:/Users/Administrator/Desktop/Osobne/mixerAI/src/MixerAI.Backend/Program.cs)
+  Main API wiring
+- [src/MixerAI.Backend/Controllers/LibraryController.cs](c:/Users/Administrator/Desktop/Osobne/mixerAI/src/MixerAI.Backend/Controllers/LibraryController.cs)
+  Track upload, delete, and audio file serving
+- [src/MixerAI.Backend/Services/AiMixRenderService.cs](c:/Users/Administrator/Desktop/Osobne/mixerAI/src/MixerAI.Backend/Services/AiMixRenderService.cs)
+  Backend bridge to Python mix rendering
+- [ai/render_mix.py](c:/Users/Administrator/Desktop/Osobne/mixerAI/ai/render_mix.py)
+  Core transition planning and render logic
