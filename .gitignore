@@ -4,6 +4,9 @@ obj/
 .vs/
 *.user
 *.suo
+.dotnet/
+.nuget/
+.tools/
 
 # Python
 __pycache__/

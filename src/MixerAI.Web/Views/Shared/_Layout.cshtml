@@ -3,27 +3,24 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>@ViewData["Title"] - BeatMix</title>
+    <title>@ViewData["Title"] - MixerAI</title>
     <script type="importmap"></script>
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/MixerAI.Web.styles.css" asp-append-version="true" />
-    
-    <!-- DJ Co-Pilot Essentials -->
-    <script src="https://unpkg.com/wavesurfer.js@7"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
 </head>
 <body class="shell-body">
     <header class="shell-header">
         <div class="container shell-nav">
-            <a class="brand-mark" asp-area="" asp-controller="Home" asp-action="Index">MixerAI <span class="badge bg-warning text-dark ms-2">PRO</span></a>
+            <a class="brand-mark" asp-area="" asp-controller="Home" asp-action="Index">MixerAI <span class="badge bg-warning text-dark ms-2">Workspace</span></a>
             <nav class="d-flex align-items-center">
                 @if (User.Identity?.IsAuthenticated == true)
                 {
-                    <a class="nav-link me-3" href="/Library">Knižnica</a>
+                    <a class="nav-link me-3" href="/Library">Library</a>
                     <span class="text-muted small me-3">@User.Identity.Name</span>
                     <form asp-controller="Account" asp-action="Logout" method="post" class="d-inline">
-                        <button type="submit" class="btn btn-sm btn-outline-danger">Odhlásiť</button>
+                        @Html.AntiForgeryToken()
+                        <button type="submit" class="btn btn-sm btn-outline-danger">Log out</button>
                     </form>
                 }
             </nav>
@@ -37,7 +34,7 @@
 
     <footer class="footer text-muted">
         <div class="container">
-            Beat analysis, timing editor and AI-guided mix render.
+            Transition coaching, producer sketches and AI-guided mix rendering.
         </div>
     </footer>
     <script src="~/lib/jquery/dist/jquery.min.js"></script>

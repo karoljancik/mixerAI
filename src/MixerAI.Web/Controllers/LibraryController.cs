@@ -7,9 +7,9 @@ namespace MixerAI.Web.Controllers;
 [Authorize]
 public class LibraryController : Controller
 {
-    private readonly MixerBackendClient _backend;
+    private readonly IMixerBackendClient _backend;
 
-    public LibraryController(MixerBackendClient backend)
+    public LibraryController(IMixerBackendClient backend)
     {
         _backend = backend;
     }
@@ -34,6 +34,14 @@ public class LibraryController : Controller
     {
         var ok = await _backend.DeleteTrackAsync(id);
         return ok ? Ok() : NotFound();
+    }
+
+    [HttpPost("/Library/retry/{id:guid}")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Retry(Guid id)
+    {
+        var ok = await _backend.RetryTrackAnalysisAsync(id);
+        return ok ? Accepted() : BadRequest();
     }
 
     /// <summary>

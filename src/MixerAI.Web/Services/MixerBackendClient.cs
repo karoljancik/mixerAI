@@ -7,7 +7,7 @@ using MixerAI.Web.Models;
 
 namespace MixerAI.Web.Services;
 
-public sealed class MixerBackendClient
+public sealed class MixerBackendClient : IMixerBackendClient
 {
     private readonly HttpClient _httpClient;
     private readonly Microsoft.AspNetCore.Http.IHttpContextAccessor _httpContextAccessor;
@@ -17,12 +17,6 @@ public sealed class MixerBackendClient
         _httpClient = httpClient;
         _httpClient.BaseAddress = new Uri(options.Value.BaseUrl);
         _httpContextAccessor = httpContextAccessor;
-
-        var token = _httpContextAccessor.HttpContext?.User.FindFirst("AccessToken")?.Value;
-        if (!string.IsNullOrEmpty(token))
-        {
-            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        }
     }
 
     public async Task<bool> RegisterAsync(string email, string password)
@@ -51,7 +45,8 @@ public sealed class MixerBackendClient
     // --- LIBRARY OPERATIONS ---
     public async Task<List<TrackViewModel>> GetTracksAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.GetAsync("/api/tracks", cancellationToken);
+        using var request = CreateAuthorizedRequest(HttpMethod.Get, "/api/tracks");
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<List<TrackViewModel>>(cancellationToken) ?? [];
     }
@@ -61,7 +56,8 @@ public sealed class MixerBackendClient
         using var content = new MultipartFormDataContent();
         content.Add(await CreateFileContentAsync(file, cancellationToken), "file", file.FileName);
         
-        using var response = await _httpClient.PostAsync("/api/tracks/upload", content, cancellationToken);
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, "/api/tracks/upload", content);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         
         return await response.Content.ReadFromJsonAsync<TrackViewModel>(cancellationToken) 
@@ -72,13 +68,22 @@ public sealed class MixerBackendClient
 
     public async Task<bool> DeleteTrackAsync(Guid trackId, CancellationToken cancellationToken = default)
     {
-        using var response = await _httpClient.DeleteAsync($"/api/tracks/{trackId}", cancellationToken);
+        using var request = CreateAuthorizedRequest(HttpMethod.Delete, $"/api/tracks/{trackId}");
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        return response.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> RetryTrackAnalysisAsync(Guid trackId, CancellationToken cancellationToken = default)
+    {
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, $"/api/tracks/{trackId}/retry-analysis");
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
         return response.IsSuccessStatusCode;
     }
 
     public async Task<(Stream Stream, string ContentType)?> GetTrackAudioStreamAsync(Guid trackId, CancellationToken cancellationToken = default)
     {
-        var response = await _httpClient.GetAsync($"/api/tracks/{trackId}/file", HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        var request = CreateAuthorizedRequest(HttpMethod.Get, $"/api/tracks/{trackId}/file");
+        var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (!response.IsSuccessStatusCode) return null;
         
         var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -99,13 +104,43 @@ public sealed class MixerBackendClient
     public async Task<byte[]> RenderMixFromLibraryAsync(Guid trackAId, Guid trackBId, CancellationToken cancellationToken = default)
     {
         var payload = new { trackAId, trackBId };
-        using var response = await _httpClient.PostAsJsonAsync("/api/mix/render-from-library", payload, cancellationToken);
+        using var request = CreateAuthorizedJsonRequest(HttpMethod.Post, "/api/mix/render-from-library", payload);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(cancellationToken);
             throw new InvalidOperationException(ParseBackendError(error));
         }
         return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<string>> GetAvailableSetIdsAsync(CancellationToken cancellationToken = default)
+    {
+        using var request = CreateAuthorizedRequest(HttpMethod.Get, "/api/ai/sets");
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<List<string>>(cancellationToken) ?? [];
+    }
+
+    public async Task<IReadOnlyList<TransitionRecommendationViewModel>> RecommendTransitionsAsync(
+        TransitionRecommendationRequestViewModel requestModel,
+        CancellationToken cancellationToken = default)
+    {
+        using var request = CreateAuthorizedJsonRequest(HttpMethod.Post, "/api/ai/recommendations", new
+        {
+            requestModel.LeftSetId,
+            requestModel.RightSetId,
+            requestModel.TopK,
+        });
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException(ParseBackendError(error));
+        }
+
+        return await response.Content.ReadFromJsonAsync<List<TransitionRecommendationViewModel>>(cancellationToken)
+            ?? [];
     }
     
     // --- MIX JOB OPERATIONS ---
@@ -120,7 +155,8 @@ public sealed class MixerBackendClient
         content.Add(await CreateFileContentAsync(trackA, cancellationToken), "trackA", trackA.FileName);
         content.Add(await CreateFileContentAsync(trackB, cancellationToken), "trackB", trackB.FileName);
 
-        using var response = await _httpClient.PostAsync("/api/mix-jobs", content, cancellationToken);
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, "/api/mix-jobs", content);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -150,7 +186,8 @@ public sealed class MixerBackendClient
             content.Add(new StringContent(right.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)), "rightStartSeconds");
         }
 
-        using var response = await _httpClient.PostAsync("/api/mix/render", content, cancellationToken);
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, "/api/mix/render", content);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -174,7 +211,8 @@ public sealed class MixerBackendClient
         content.Add(await CreateFileContentAsync(trackA, cancellationToken), "trackA", trackA.FileName);
         content.Add(await CreateFileContentAsync(trackB, cancellationToken), "trackB", trackB.FileName);
 
-        using var response = await _httpClient.PostAsync("/api/mix/analyze", content, cancellationToken);
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, "/api/mix/analyze", content);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -197,7 +235,8 @@ public sealed class MixerBackendClient
             durationSeconds,
             seed,
         };
-        using var response = await _httpClient.PostAsJsonAsync("/api/generate-track", payload, cancellationToken);
+        using var request = CreateAuthorizedJsonRequest(HttpMethod.Post, "/api/generate-track", payload);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -216,7 +255,8 @@ public sealed class MixerBackendClient
         CancellationToken cancellationToken)
     {
         var url = seed.HasValue ? $"/api/generate-mini-mix?seed={seed.Value}" : "/api/generate-mini-mix";
-        using var response = await _httpClient.PostAsync(url, null, cancellationToken);
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, url);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
         
         if (!response.IsSuccessStatusCode)
         {
@@ -271,5 +311,29 @@ public sealed class MixerBackendClient
         var content = new StreamContent(file.OpenReadStream());
         content.Headers.ContentType = new(string.IsNullOrEmpty(file.ContentType) ? "application/octet-stream" : file.ContentType);
         return Task.FromResult(content);
+    }
+
+    private HttpRequestMessage CreateAuthorizedJsonRequest<TPayload>(HttpMethod method, string uri, TPayload payload)
+    {
+        var request = CreateAuthorizedRequest(method, uri);
+        request.Content = JsonContent.Create(payload);
+        return request;
+    }
+
+    private HttpRequestMessage CreateAuthorizedRequest(HttpMethod method, string uri, HttpContent? content = null)
+    {
+        var request = new HttpRequestMessage(method, uri);
+        if (content != null)
+        {
+            request.Content = content;
+        }
+
+        var token = _httpContextAccessor.HttpContext?.User.FindFirst("AccessToken")?.Value;
+        if (!string.IsNullOrWhiteSpace(token))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        }
+
+        return request;
     }
 }

@@ -25,6 +25,10 @@ public class Track
     public string? WaveformDataJson { get; set; }
     
     public string Status { get; set; } = "Pending"; // Pending, Analyzing, Ready, Error
+    public int AnalysisAttempts { get; set; }
+    public string? LastAnalysisError { get; set; }
+    public DateTime? LastAnalysisStartedAtUtc { get; set; }
+    public DateTime? LastAnalysisCompletedAtUtc { get; set; }
     
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     

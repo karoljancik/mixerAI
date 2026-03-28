@@ -7,6 +7,7 @@ using MixerAI.Backend.Hubs;
 using MixerAI.Backend.Workers;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -67,8 +68,32 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-    // db.Database.Migrate(); // Pri medior pozicii beziace na test mozes aj EnsureCreated/Migrate. Tu ho po restarte vytvorime
-    db.Database.EnsureCreated();
+    var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("DatabaseStartup");
+    var delay = TimeSpan.FromSeconds(2);
+
+    for (var attempt = 1; attempt <= 10; attempt++)
+    {
+        try
+        {
+            logger.LogInformation("Applying EF Core migrations for MixerAI.Backend. Attempt {Attempt}/10.", attempt);
+            db.Database.Migrate();
+            break;
+        }
+        catch (Exception exception) when (exception is NpgsqlException or InvalidOperationException)
+        {
+            if (attempt == 10)
+            {
+                throw;
+            }
+
+            logger.LogWarning(
+                exception,
+                "Database was not ready for migration attempt {Attempt}. Waiting {DelaySeconds} seconds before retry.",
+                attempt,
+                delay.TotalSeconds);
+            Thread.Sleep(delay);
+        }
+    }
 }
 
 app.UseExceptionHandler();
@@ -267,3 +292,5 @@ public sealed class PhysicalFileFormFile : IFormFile
     public void CopyTo(Stream target) { using var s = OpenReadStream(); s.CopyTo(target); }
     public async Task CopyToAsync(Stream target, CancellationToken ct = default) { await using var s = OpenReadStream(); await s.CopyToAsync(target, ct); }
 }
+
+public partial class Program;

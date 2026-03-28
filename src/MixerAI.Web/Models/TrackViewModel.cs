@@ -10,5 +10,9 @@ public class TrackViewModel
     public double DurationSeconds { get; set; }
     public string? WaveformDataJson { get; set; }
     public string Status { get; set; } = string.Empty;
+    public int AnalysisAttempts { get; set; }
+    public string? LastAnalysisError { get; set; }
+    public DateTime? LastAnalysisStartedAtUtc { get; set; }
+    public DateTime? LastAnalysisCompletedAtUtc { get; set; }
     public DateTime CreatedAtUtc { get; set; }
 }

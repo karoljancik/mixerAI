@@ -3,4 +3,7 @@
     <Project Path="src/MixerAI.Backend/MixerAI.Backend.csproj" />
     <Project Path="src/MixerAI.Web/MixerAI.Web.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MixerAI.Backend.Tests/MixerAI.Backend.Tests.csproj" />
+  </Folder>
 </Solution>

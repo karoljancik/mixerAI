@@ -1,8 +1,32 @@
-@model List<MixerAI.Web.Models.TrackViewModel>
+@model MixerAI.Web.Models.StudioWorkspaceViewModel
 @{
-    ViewData["Title"] = "DJ Studio";
+    ViewData["Title"] = "AI DJ Producer Workspace";
     Layout = "_StudioLayout";
 }
+
+<section class="workspace-hero">
+    <div>
+        <p class="workspace-kicker">MixerAI Workspace</p>
+        <h1>AI-powered DJ and producer copilot</h1>
+        <p class="workspace-copy">
+            Build transitions, discover set matches, and generate fresh sketches for young DJs and producers in one flow.
+        </p>
+    </div>
+    <div class="workspace-metrics">
+        <div class="workspace-metric">
+            <span class="workspace-metric-label">Ready tracks</span>
+            <strong>@Model.ReadyTrackCount</strong>
+        </div>
+        <div class="workspace-metric">
+            <span class="workspace-metric-label">Needs attention</span>
+            <strong>@Model.FailedTrackCount</strong>
+        </div>
+        <div class="workspace-metric">
+            <span class="workspace-metric-label">AI set corpus</span>
+            <strong>@Model.AvailableSetIds.Count</strong>
+        </div>
+    </div>
+</section>
 
 <div class="studio-waveform-bar">
     <div class="waveform-track deck-a-color" id="drop-zone-a"
@@ -36,28 +60,28 @@
                 <div id="time-a" class="deck-time">0:00</div>
             </div>
             <div class="vinyl-disc" id="vinyl-a">
-                <div class="vinyl-inner" id="vinyl-icon-a">▶</div>
+                <div class="vinyl-inner" id="vinyl-icon-a">&#9654;</div>
             </div>
         </div>
         <div class="deck-controls-bar">
-            <button class="ctrl-btn" onclick="wavesurferA.skip(-5)" title="-5s">⏮</button>
-            <button class="ctrl-btn play-btn" id="btn-play-a" onclick="togglePlay('a')" title="Play/Pause">▶</button>
-            <button class="ctrl-btn" onclick="wavesurferA.stop()" title="Stop">■</button>
+            <button class="ctrl-btn" onclick="wavesurferA.skip(-5)" title="-5s">&#9198;</button>
+            <button class="ctrl-btn play-btn" id="btn-play-a" onclick="togglePlay('a')" title="Play/Pause">&#9654;</button>
+            <button class="ctrl-btn" onclick="wavesurferA.stop()" title="Stop">&#9632;</button>
         </div>
     </div>
 
     <div class="mixer-center">
-        <div class="mixer-label">MIXER</div>
+        <div class="mixer-label">Transition Coach</div>
         <div class="crossfader-container" title="Preview crossfader for live deck playback only. It does not affect the generated mix.">
             <div class="crossfader-label">CF</div>
             <input type="range" id="crossfader" min="0" max="100" value="50" class="crossfader-slider" oninput="updateCrossfade(this.value)" />
         </div>
         <div class="ai-copilot" id="ai-advice">
-            <div class="ai-copilot-header">AI CO-PILOT</div>
-            <div id="advice-text" class="ai-advice-text">Natiahni skladby do oboch deckov.</div>
+            <div class="ai-copilot-header">AI TRANSITION COACH</div>
+            <div id="advice-text" class="ai-advice-text">Load both decks to get BPM, key and transition guidance.</div>
         </div>
         <button id="render-btn" class="render-btn" onclick="renderMix()">
-            <span id="render-btn-text">GENERATE MIX</span>
+            <span id="render-btn-text">Generate AI Mix</span>
         </button>
         <div id="render-result" class="render-result" style="display:none;"></div>
     </div>
@@ -76,83 +100,254 @@
                 <div id="time-b" class="deck-time">0:00</div>
             </div>
             <div class="vinyl-disc vinyl-b" id="vinyl-b">
-                <div class="vinyl-inner" id="vinyl-icon-b">▶</div>
+                <div class="vinyl-inner" id="vinyl-icon-b">&#9654;</div>
             </div>
         </div>
         <div class="deck-controls-bar">
-            <button class="ctrl-btn" onclick="wavesurferB.skip(-5)" title="-5s">⏮</button>
-            <button class="ctrl-btn play-btn" id="btn-play-b" onclick="togglePlay('b')" title="Play/Pause">▶</button>
-            <button class="ctrl-btn" onclick="wavesurferB.stop()" title="Stop">■</button>
+            <button class="ctrl-btn" onclick="wavesurferB.skip(-5)" title="-5s">&#9198;</button>
+            <button class="ctrl-btn play-btn" id="btn-play-b" onclick="togglePlay('b')" title="Play/Pause">&#9654;</button>
+            <button class="ctrl-btn" onclick="wavesurferB.stop()" title="Stop">&#9632;</button>
         </div>
     </div>
 </div>
 
+<section class="ai-workbench-grid">
+    <article class="ai-panel">
+        <div class="ai-panel-header">
+            <div>
+                <p class="ai-panel-kicker">AI Matchmaker</p>
+                <h2>Find transition-ready sets</h2>
+            </div>
+            <span class="ai-panel-badge">@Model.AvailableSetIds.Count data sets</span>
+        </div>
+
+        @if (Model.AvailableSetIds.Count == 0)
+        {
+            <p class="ai-empty-state">Import feature manifests into the corpus first. Once present, the copilot can rank transition candidates across sets.</p>
+        }
+        else
+        {
+            <form asp-action="RecommendTransitions" method="post" class="ai-form-grid">
+                <div class="ai-form-field">
+                    <label asp-for="Recommendation.LeftSetId"></label>
+                    <select asp-for="Recommendation.LeftSetId" class="studio-select">
+                        @foreach (var setId in Model.AvailableSetIds)
+                        {
+                            <option value="@setId">@setId</option>
+                        }
+                    </select>
+                    <span asp-validation-for="Recommendation.LeftSetId" class="text-danger"></span>
+                </div>
+                <div class="ai-form-field">
+                    <label asp-for="Recommendation.RightSetId"></label>
+                    <select asp-for="Recommendation.RightSetId" class="studio-select">
+                        @foreach (var setId in Model.AvailableSetIds)
+                        {
+                            <option value="@setId">@setId</option>
+                        }
+                    </select>
+                    <span asp-validation-for="Recommendation.RightSetId" class="text-danger"></span>
+                </div>
+                <div class="ai-form-field">
+                    <label asp-for="Recommendation.TopK"></label>
+                    <input asp-for="Recommendation.TopK" class="studio-input" min="1" max="20" />
+                    <span asp-validation-for="Recommendation.TopK" class="text-danger"></span>
+                </div>
+                <div class="ai-form-actions">
+                    <button type="submit" class="studio-secondary-btn">Recommend Transitions</button>
+                </div>
+            </form>
+
+            @if (!string.IsNullOrWhiteSpace(Model.RecommendationErrorMessage))
+            {
+                <div class="inline-error-card">@Model.RecommendationErrorMessage</div>
+            }
+
+            @if (Model.RecommendationResults.Any())
+            {
+                <div class="recommendation-list">
+                    @foreach (var recommendation in Model.RecommendationResults)
+                    {
+                        <div class="recommendation-item">
+                            <div class="recommendation-meta">
+                                <strong>@recommendation.LeftSetId</strong>
+                                <span>@recommendation.LeftStartSeconds.ToString("0.0")s</span>
+                            </div>
+                            <div class="recommendation-arrow">&#8594;</div>
+                            <div class="recommendation-meta">
+                                <strong>@recommendation.RightSetId</strong>
+                                <span>@recommendation.RightStartSeconds.ToString("0.0")s</span>
+                            </div>
+                            <div class="recommendation-score">
+                                <span>Fit score</span>
+                                <strong>@((recommendation.Probability * 100).ToString("0.0"))%</strong>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </article>
+
+    <article class="ai-panel">
+        <div class="ai-panel-header">
+            <div>
+                <p class="ai-panel-kicker">Producer Lab</p>
+                <h2>Generate track sketches</h2>
+            </div>
+            <span class="ai-panel-badge">Phrase and latent models</span>
+        </div>
+
+        <form asp-action="GenerateTrack" method="post" class="ai-form-grid">
+            <div class="ai-form-field">
+                <label asp-for="Generation.GeneratedTrackStyle"></label>
+                <select asp-for="Generation.GeneratedTrackStyle" class="studio-select">
+                    <option value="liquid">Liquid</option>
+                    <option value="deep">Deep</option>
+                </select>
+                <span asp-validation-for="Generation.GeneratedTrackStyle" class="text-danger"></span>
+            </div>
+            <div class="ai-form-field">
+                <label asp-for="Generation.GeneratedTrackDurationSeconds"></label>
+                <input asp-for="Generation.GeneratedTrackDurationSeconds" class="studio-input" min="96" max="240" />
+                <span asp-validation-for="Generation.GeneratedTrackDurationSeconds" class="text-danger"></span>
+            </div>
+            <div class="ai-form-field">
+                <label asp-for="Generation.GeneratedTrackSeed"></label>
+                <input asp-for="Generation.GeneratedTrackSeed" class="studio-input" placeholder="Optional seed" />
+                <span asp-validation-for="Generation.GeneratedTrackSeed" class="text-danger"></span>
+            </div>
+            <div class="ai-form-actions">
+                <button type="submit" class="studio-secondary-btn">Generate Sketch</button>
+            </div>
+        </form>
+
+        <form asp-action="GenerateMiniMix" method="post" class="ai-inline-form">
+            <input type="hidden" asp-for="Generation.GeneratedTrackStyle" />
+            <input type="hidden" asp-for="Generation.GeneratedTrackDurationSeconds" />
+            <input type="hidden" asp-for="Generation.GeneratedTrackSeed" />
+            <button type="submit" class="studio-ghost-btn">Generate Mini Mix Inspiration</button>
+        </form>
+
+        @if (!string.IsNullOrWhiteSpace(Model.GenerationErrorMessage))
+        {
+            <div class="inline-error-card">@Model.GenerationErrorMessage</div>
+        }
+
+        <div class="ai-panel-note">
+            Use the generated sketch as a starting point for arrangement ideas, transitions, and groove experiments, not as a final master.
+        </div>
+    </article>
+
+    <article class="ai-panel">
+        <div class="ai-panel-header">
+            <div>
+                <p class="ai-panel-kicker">Learning Loop</p>
+                <h2>What the copilot is helping with</h2>
+            </div>
+            <span class="ai-panel-badge">Human-in-the-loop</span>
+        </div>
+        <ul class="ai-insight-list">
+            <li>Tempo compatibility and key awareness for each deck pairing.</li>
+            <li>Corpus-backed transition recommendations from real set features.</li>
+            <li>Fast generative sketches to unblock beginner producers creatively.</li>
+            <li>Failure recovery for track analysis with visible retry actions.</li>
+        </ul>
+    </article>
+</section>
+
 <div class="studio-library">
     <div class="library-header">
-        <span class="eyebrow">KNIŽNICA — pretiahni track na deck</span>
-        <a href="/Library" class="library-manage-btn">SPRAVOVAŤ</a>
+        <span class="eyebrow">LIBRARY - drag a ready track onto a deck</span>
+        <a href="/Library" class="library-manage-btn">Manage Library</a>
     </div>
     <div class="library-table-wrap">
         <table class="library-table">
             <thead>
                 <tr>
-                    <th style="width:70px">STATUS</th>
-                    <th>Názov</th>
+                    <th style="width:110px">Status</th>
+                    <th>Title</th>
                     <th style="width:70px">BPM</th>
-                    <th style="width:50px">KEY</th>
-                    <th style="width:60px">Dĺžka</th>
-                    <th style="width:40px"></th>
+                    <th style="width:60px">Key</th>
+                    <th style="width:70px">Length</th>
+                    <th style="width:90px">Attempts</th>
+                    <th style="width:150px">Actions</th>
                 </tr>
             </thead>
             <tbody>
-                @foreach (var t in Model)
+                @foreach (var track in Model.Tracks)
                 {
-                    var isReady = t.Status == "Ready";
+                    var isReady = string.Equals(track.Status, "Ready", StringComparison.OrdinalIgnoreCase);
+                    var isError = string.Equals(track.Status, "Error", StringComparison.OrdinalIgnoreCase);
                     <tr class="library-row @(!isReady ? "row-not-ready" : "")"
-                        id="lib-row-@t.Id"
-                        data-id="@t.Id"
-                        data-bpm="@(t.BPM?.ToString("0.0") ?? "--")"
-                        data-key="@(t.CamelotKey ?? "--")"
-                        data-title="@t.Title"
-                        data-waveform="@t.WaveformDataJson"
-                        data-duration="@t.DurationSeconds"
+                        id="lib-row-@track.Id"
+                        data-id="@track.Id"
+                        data-bpm="@(track.BPM?.ToString("0.0") ?? "--")"
+                        data-key="@(track.CamelotKey ?? "--")"
+                        data-title="@track.Title"
+                        data-waveform="@track.WaveformDataJson"
+                        data-duration="@track.DurationSeconds"
                         draggable="@(isReady ? "true" : "false")"
-                        ondragstart="handleDragStart(event, '@t.Id')"
+                        ondragstart="handleDragStart(event, '@track.Id')"
                         ondragend="this.classList.remove('is-dragging')">
                         <td>
                             @if (isReady)
                             {
-                                <div class="lib-load-btns">
-                                    <button onclick="loadFromLib('a', '@t.Id')" class="lib-btn lib-btn-a" title="Load to A">A</button>
-                                    <button onclick="loadFromLib('b', '@t.Id')" class="lib-btn lib-btn-b" title="Load to B">B</button>
-                                </div>
+                                <span class="status-pill status-ready">Ready</span>
                             }
-                            else if (t.Status == "Analyzing")
+                            else if (string.Equals(track.Status, "Analyzing", StringComparison.OrdinalIgnoreCase))
                             {
-                                <span class="badge-analyzing"><span class="spinner-dot"></span></span>
+                                <span class="status-pill status-analyzing"><span class="spinner-dot"></span> Analyzing</span>
+                            }
+                            else if (isError)
+                            {
+                                <span class="status-pill status-error">Error</span>
                             }
                             else
                             {
-                                <span class="badge-error" title="@t.Status">!</span>
+                                <span class="status-pill status-pending">Queued</span>
                             }
                         </td>
-                        <td class="lib-title" title="@t.Title">@t.Title</td>
-                        <td class="lib-bpm">@(t.BPM?.ToString("0.0") ?? "--")</td>
-                        <td><span class="camelot-badge-sm">@(t.CamelotKey ?? "--")</span></td>
-                        <td class="lib-dur">@(t.DurationSeconds > 0 ? TimeSpan.FromSeconds(t.DurationSeconds).ToString(@"mm\:ss") : "--")</td>
+                        <td class="lib-title" title="@track.Title">
+                            <div>@track.Title</div>
+                            @if (isError && !string.IsNullOrWhiteSpace(track.LastAnalysisError))
+                            {
+                                <div class="track-inline-error">@track.LastAnalysisError</div>
+                            }
+                        </td>
+                        <td class="lib-bpm">@(track.BPM?.ToString("0.0") ?? "--")</td>
+                        <td><span class="camelot-badge-sm">@(track.CamelotKey ?? "--")</span></td>
+                        <td class="lib-dur">@(track.DurationSeconds > 0 ? TimeSpan.FromSeconds(track.DurationSeconds).ToString(@"mm\:ss") : "--")</td>
+                        <td class="lib-dur">@track.AnalysisAttempts</td>
                         <td>
-                            <button class="lib-delete-btn-mini" onclick="deleteTrackFromMini('@t.Id', '@t.Title')">🗑</button>
+                            <div class="library-actions">
+                                @if (isReady)
+                                {
+                                    <div class="lib-load-btns">
+                                        <button type="button" onclick="loadFromLib('a', '@track.Id')" class="lib-btn lib-btn-a" title="Load to A">A</button>
+                                        <button type="button" onclick="loadFromLib('b', '@track.Id')" class="lib-btn lib-btn-b" title="Load to B">B</button>
+                                    </div>
+                                }
+                                else if (isError)
+                                {
+                                    <button type="button" class="mini-action-btn" onclick="retryTrackAnalysis('@track.Id', '@track.Title')">Retry</button>
+                                }
+
+                                <button type="button" class="lib-delete-btn-mini" onclick="deleteTrackFromMini('@track.Id', '@track.Title')">&#128465;</button>
+                            </div>
                         </td>
                     </tr>
                 }
-                @if (!Model.Any())
+                @if (!Model.Tracks.Any())
                 {
-                    <tr><td colspan="6" class="lib-empty">Pridaj skladbu v sekcii <a href="/Library">Spravovať</a></td></tr>
+                    <tr><td colspan="7" class="lib-empty">Upload your first track in <a href="/Library">Library</a> to start mixing.</td></tr>
                 }
             </tbody>
         </table>
     </div>
 </div>
+
+@Html.AntiForgeryToken()
 
 @section Scripts {
 <style>
@@ -235,14 +430,14 @@ requestAnimationFrame(animateVinyls);
         updatePlayBtn(deck, false);
     });
     ws.on('error', error => {
-        console.error(`WaveSurfer ERROR for DECK ${deck.toUpperCase()}:`, error);
-        document.getElementById(`title-${deck}`).innerHTML = `<span style="color:var(--danger)">Súbor nenájdený (${error.name || 'Error'})</span>`;
+        console.error(`WaveSurfer error for deck ${deck.toUpperCase()}:`, error);
+        document.getElementById(`title-${deck}`).innerHTML = '<span style="color:var(--danger)">Audio file not available</span>';
     });
 });
 
 function updatePlayBtn(deck, playing) {
-    document.getElementById(`btn-play-${deck}`).textContent = playing ? '⏸' : '▶';
-    document.getElementById(`vinyl-icon-${deck}`).textContent = playing ? '⏸' : '▶';
+    document.getElementById(`btn-play-${deck}`).textContent = playing ? '\u23f8' : '\u25b6';
+    document.getElementById(`vinyl-icon-${deck}`).textContent = playing ? '\u23f8' : '\u25b6';
 }
 
 function formatTime(seconds) {
@@ -328,31 +523,57 @@ function updateCrossfade(value) {
 function updateAiAdvice() {
     const advice = document.getElementById('advice-text');
     if (!stateA.id || !stateB.id) {
-        advice.innerHTML = 'Natiahni skladby do oboch deckov.';
+        advice.innerHTML = 'Load both tracks to get transition notes, BPM fit and tonal hints.';
         return;
     }
 
     const messages = [];
     if (!isNaN(stateA.bpm) && !isNaN(stateB.bpm)) {
         const diff = Math.abs(stateA.bpm - stateB.bpm).toFixed(1);
-        if (diff <= 3) messages.push(`BPM OK: <b>${stateA.bpm}</b> vs <b>${stateB.bpm}</b>`);
-        else if (diff <= 8) messages.push(`BPM rozdiel ${diff}: chce to jemný sync.`);
-        else messages.push(`Veľký BPM rozdiel ${diff}: render bude musieť viac stretchnúť track B.`);
+        if (diff <= 3) messages.push(`Tempo fit is strong: <b>${stateA.bpm}</b> vs <b>${stateB.bpm}</b> BPM.`);
+        else if (diff <= 8) messages.push(`Tempo gap is ${diff} BPM. Light sync should still work.`);
+        else messages.push(`Tempo gap is ${diff} BPM. Expect heavier stretching on deck B.`);
     }
 
     if (stateA.key && stateB.key && stateA.key !== '--' && stateB.key !== '--') {
         if (stateA.key === stateB.key) {
-            messages.push(`Tónina sedí: oba tracky sú v <b>${stateA.key}</b>.`);
+            messages.push(`Keys align cleanly in <b>${stateA.key}</b>.`);
         } else {
-            messages.push(`Tóniny: <b>${stateA.key}</b> a <b>${stateB.key}</b>.`);
+            messages.push(`Check harmonic blend: <b>${stateA.key}</b> into <b>${stateB.key}</b>.`);
         }
     }
 
-    advice.innerHTML = messages.join('<br>') || 'Analyzujem prechod...';
+    messages.push('Next step: render a reference mix, then compare it to your own manual transition.');
+    advice.innerHTML = messages.join('<br>');
+}
+
+async function retryTrackAnalysis(id, title) {
+    if (!confirm(`Retry analysis for "${title}"?`)) return;
+
+    const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value || '';
+    try {
+        const response = await fetch(`/Library/retry/${id}`, {
+            method: 'POST',
+            headers: {
+                'RequestVerificationToken': token,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({ '__RequestVerificationToken': token }),
+        });
+
+        if (!response.ok) {
+            alert('Retry request failed.');
+            return;
+        }
+
+        window.location.reload();
+    } catch (error) {
+        alert(`Retry failed: ${error.message}`);
+    }
 }
 
 async function deleteTrackFromMini(id, title) {
-    if (!confirm(`Naozaj chceš vymazať "${title}"?`)) return;
+    if (!confirm(`Delete "${title}" from the library?`)) return;
     const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value || '';
     try {
         const response = await fetch(`/Library/delete/${id}`, {
@@ -364,7 +585,7 @@ async function deleteTrackFromMini(id, title) {
             body: new URLSearchParams({ '__RequestVerificationToken': token }),
         });
         if (!response.ok) {
-            alert('Vymazanie zlyhalo.');
+            alert('Delete failed.');
             return;
         }
 
@@ -376,13 +597,13 @@ async function deleteTrackFromMini(id, title) {
             setTimeout(() => row.remove(), 300);
         }
     } catch (error) {
-        alert(`Chyba: ${error.message}`);
+        alert(`Delete failed: ${error.message}`);
     }
 }
 
 async function renderMix() {
     if (!stateA.id || !stateB.id) {
-        document.getElementById('advice-text').innerHTML = 'Zvoľ skladby pre oba decky.';
+        document.getElementById('advice-text').innerHTML = 'Choose tracks for both decks first.';
         return;
     }
 
@@ -390,7 +611,7 @@ async function renderMix() {
     const btnText = document.getElementById('render-btn-text');
     const resultDiv = document.getElementById('render-result');
     btn.disabled = true;
-    btnText.textContent = 'GENERUJEM MIX...';
+    btnText.textContent = 'Rendering...';
     resultDiv.style.display = 'none';
 
     try {
@@ -410,18 +631,18 @@ async function renderMix() {
         resultDiv.style.display = 'block';
         resultDiv.innerHTML = `
             <div class="render-success">
-                Mix hotový.
+                AI mix reference ready.
                 <audio controls src="${url}" class="render-audio"></audio>
-                <a href="${url}" download="mixerai-mix.mp3">Stiahnuť MP3</a>
+                <a href="${url}" download="mixerai-mix.mp3">Download MP3</a>
             </div>`;
     } catch (error) {
         resultDiv.style.display = 'block';
         resultDiv.innerHTML = `<div class="render-error">${error.message}</div>`;
     } finally {
         btn.disabled = false;
-        btnText.textContent = 'GENERATE MIX';
+        btnText.textContent = 'Generate AI Mix';
     }
 }
 </script>
-@Html.AntiForgeryToken()
+<partial name="_ValidationScriptsPartial" />
 }

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Http;
 using MixerAI.Web.Configuration;
 using MixerAI.Web.Services;
 
@@ -12,7 +13,7 @@ builder.Services.AddControllersWithViews();
 builder.Services.Configure<BackendApiOptions>(builder.Configuration.GetSection(BackendApiOptions.SectionName));
 builder.Services.AddHttpContextAccessor();
 
-builder.Services.AddHttpClient<MixerBackendClient>(client =>
+builder.Services.AddHttpClient<IMixerBackendClient, MixerBackendClient>(client =>
 {
     client.Timeout = TimeSpan.FromMinutes(15);
 });
@@ -23,6 +24,10 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     {
         options.LoginPath = "/Account/Login";
         options.AccessDeniedPath = "/Home/Error";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Lax;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        options.SlidingExpiration = true;
     });
 builder.Services.AddAuthorization(options =>
 {
@@ -53,3 +58,5 @@ app.MapControllerRoute(
     .WithStaticAssets();
 
 app.Run();
+
+public partial class Program;

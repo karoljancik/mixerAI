@@ -57,8 +57,27 @@ public class LibraryController : ControllerBase
         return Ok(new { message = "Track deleted." });
     }
 
+    [HttpPost("{id:guid}/retry-analysis")]
+    public async Task<IActionResult> RetryTrackAnalysis(Guid id, CancellationToken cancellationToken)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var track = await _db.Tracks.FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId, cancellationToken);
+        if (track == null) return NotFound();
+        if (string.Equals(track.Status, "Analyzing", StringComparison.OrdinalIgnoreCase))
+        {
+            return Conflict(new { error = "Track analysis is already in progress." });
+        }
+
+        track.Status = "Pending";
+        track.LastAnalysisError = null;
+        await _db.SaveChangesAsync(cancellationToken);
+
+        await QueueTrackAnalysisAsync(track.Id);
+        return Accepted(new { message = "Track analysis queued.", trackId = track.Id });
+    }
+
     [HttpPost("upload")]
-    public async Task<IActionResult> UploadTrack(IFormFile file)
+    public async Task<IActionResult> UploadTrack(IFormFile file, CancellationToken cancellationToken)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (file == null || file.Length == 0) return BadRequest("File is empty.");
@@ -84,15 +103,9 @@ public class LibraryController : ControllerBase
         };
 
         _db.Tracks.Add(track);
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(cancellationToken);
 
-        // Queue for AI analysis
-        await _taskQueue.QueueBackgroundWorkItemAsync(async (sp, token) =>
-        {
-            using var scope = sp.CreateScope();
-            var analysisService = scope.ServiceProvider.GetRequiredService<TrackAnalysisService>();
-            await analysisService.ProcessTrackAsync(trackId, token);
-        });
+        await QueueTrackAnalysisAsync(trackId);
 
         return Accepted(track);
     }
@@ -120,5 +133,15 @@ public class LibraryController : ControllerBase
         };
 
         return PhysicalFile(actualFilePath, mimeType, true);
+    }
+
+    private ValueTask QueueTrackAnalysisAsync(Guid trackId)
+    {
+        return _taskQueue.QueueBackgroundWorkItemAsync(async (sp, token) =>
+        {
+            using var scope = sp.CreateScope();
+            var analysisService = scope.ServiceProvider.GetRequiredService<TrackAnalysisService>();
+            await analysisService.ProcessTrackAsync(trackId, token);
+        });
     }
 }

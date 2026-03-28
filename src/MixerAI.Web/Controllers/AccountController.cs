@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
@@ -8,9 +9,9 @@ namespace MixerAI.Web.Controllers;
 [Microsoft.AspNetCore.Authorization.AllowAnonymous]
 public class AccountController : Controller
 {
-    private readonly Services.MixerBackendClient _backendClient;
+    private readonly Services.IMixerBackendClient _backendClient;
 
-    public AccountController(Services.MixerBackendClient backendClient)
+    public AccountController(Services.IMixerBackendClient backendClient)
     {
         _backendClient = backendClient;
     }
@@ -23,34 +24,19 @@ public class AccountController : Controller
     }
 
     [HttpPost]
+    [ValidateAntiForgeryToken]
     public async Task<IActionResult> Login(string email, string password, string returnUrl = "/")
     {
-        // V Medior aplikácii voláme backendove Identity Endpointy
         var response = await _backendClient.LoginAsync(email, password);
-        
+
         if (response.IsSuccess)
         {
-            var claims = new List<Claim>
-            {
-                new Claim(ClaimTypes.NameIdentifier, email),
-                new Claim(ClaimTypes.Name, email),
-                new Claim("AccessToken", response.Token) // Uložíme si Bearer token pre ďalšie API volania
-            };
-
-            var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
+            var identity = new ClaimsIdentity(BuildClaims(email, response.Token), CookieAuthenticationDefaults.AuthenticationScheme);
             await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
-
-            // Set a cookie for the AccessToken so JS can read it for SignalR
-            Response.Cookies.Append("AccessToken", response.Token, new CookieOptions { 
-                HttpOnly = false, 
-                Secure = true, 
-                SameSite = SameSiteMode.Strict 
-            });
-
             return LocalRedirect(returnUrl);
         }
 
-        ModelState.AddModelError(string.Empty, "Zlé prihlasovacie údaje.");
+        ModelState.AddModelError(string.Empty, "Zle prihlasovacie udaje.");
         return View();
     }
 
@@ -61,6 +47,7 @@ public class AccountController : Controller
     }
 
     [HttpPost]
+    [ValidateAntiForgeryToken]
     public async Task<IActionResult> Register(string email, string password)
     {
         var success = await _backendClient.RegisterAsync(email, password);
@@ -69,14 +56,73 @@ public class AccountController : Controller
             return RedirectToAction(nameof(Login));
         }
 
-        ModelState.AddModelError(string.Empty, "Registrácia zlyhala. Účet už asi existuje alebo je slabé heslo.");
+        ModelState.AddModelError(string.Empty, "Registracia zlyhala. Ucet uz asi existuje alebo je slabe heslo.");
         return View();
     }
 
     [HttpPost]
+    [ValidateAntiForgeryToken]
     public async Task<IActionResult> Logout()
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         return RedirectToAction("Index", "Home");
+    }
+
+    private static IReadOnlyList<Claim> BuildClaims(string fallbackEmail, string accessToken)
+    {
+        var payload = ReadJwtPayload(accessToken);
+        var userId = ReadClaim(payload, "sub")
+            ?? ReadClaim(payload, ClaimTypes.NameIdentifier)
+            ?? fallbackEmail;
+        var email = ReadClaim(payload, "email")
+            ?? ReadClaim(payload, ClaimTypes.Email)
+            ?? fallbackEmail;
+        var displayName = ReadClaim(payload, "unique_name")
+            ?? ReadClaim(payload, ClaimTypes.Name)
+            ?? email;
+
+        return
+        [
+            new Claim(ClaimTypes.NameIdentifier, userId),
+            new Claim(ClaimTypes.Name, displayName),
+            new Claim(ClaimTypes.Email, email),
+            new Claim("AccessToken", accessToken)
+        ];
+    }
+
+    private static JsonElement? ReadJwtPayload(string token)
+    {
+        var parts = token.Split('.');
+        if (parts.Length < 2)
+        {
+            return null;
+        }
+
+        try
+        {
+            var padded = parts[1]
+                .Replace('-', '+')
+                .Replace('_', '/');
+            padded = padded.PadRight(padded.Length + ((4 - padded.Length % 4) % 4), '=');
+
+            var jsonBytes = Convert.FromBase64String(padded);
+            return JsonDocument.Parse(jsonBytes).RootElement.Clone();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadClaim(JsonElement? payload, string claimType)
+    {
+        if (payload is not JsonElement element)
+        {
+            return null;
+        }
+
+        return element.TryGetProperty(claimType, out var value)
+            ? value.GetString()
+            : null;
     }
 }

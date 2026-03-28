@@ -1,70 +1,74 @@
 @model List<MixerAI.Web.Models.TrackViewModel>
 @{
-    ViewData["Title"] = "Moja Knižnica";
+    ViewData["Title"] = "Library";
 }
 
 <div class="lib-page">
-
-    <!-- HEADER -->
     <div class="lib-hero">
-        <span class="eyebrow">Studio Management</span>
-        <h1>Knižnica Skladieb</h1>
-        <p>Tu spravuješ svoje audio stopy. Každá skladba je AI-analyzovaná na BPM a Camelot Key.</p>
+        <span class="eyebrow">Library Control</span>
+        <h1>Your track library</h1>
+        <p>Upload source tracks, monitor AI analysis health, and requeue failed analysis runs without leaving the workflow.</p>
     </div>
 
-    <!-- UPLOAD -->
     <div class="lib-upload-bar">
         <form asp-action="Upload" method="post" enctype="multipart/form-data" class="lib-upload-form">
             <label class="lib-upload-btn" for="trackUpload">
-                ＋ Nahrať skladbu
+                + Upload track
             </label>
             <input type="file" id="trackUpload" name="file" class="d-none"
                    accept=".mp3,.wav,.flac,.mp4,.m4a,.ogg"
                    onchange="this.form.submit()" />
             <span class="lib-upload-hint">MP3 · WAV · FLAC · MP4 · M4A</span>
         </form>
-        <a href="/" class="lib-studio-btn">🎛 Otvoriť Studio</a>
+        <a href="/" class="lib-studio-btn">Open Workspace</a>
     </div>
 
-    <!-- TABLE -->
     <div class="lib-table-panel">
         <table class="lib-full-table">
             <thead>
                 <tr>
                     <th style="width:110px">Status</th>
-                    <th>Názov Skladby</th>
+                    <th>Title</th>
                     <th style="width:80px">BPM</th>
                     <th style="width:60px">Key</th>
-                    <th style="width:70px">Dĺžka</th>
-                    <th style="width:140px">Pridané</th>
-                    <th style="width:60px"></th>
+                    <th style="width:70px">Length</th>
+                    <th style="width:70px">Attempts</th>
+                    <th style="width:140px">Added</th>
+                    <th style="width:140px"></th>
                 </tr>
             </thead>
             <tbody>
                 @foreach (var track in Model)
                 {
+                    var isError = string.Equals(track.Status, "Error", StringComparison.OrdinalIgnoreCase);
                     <tr id="row-@track.Id">
                         <td>
-                            @if (track.Status == "Ready")
+                            @if (string.Equals(track.Status, "Ready", StringComparison.OrdinalIgnoreCase))
                             {
-                                <span class="badge-ready">Pripravené</span>
+                                <span class="badge-ready">Ready</span>
                             }
-                            else if (track.Status == "Analyzing")
+                            else if (string.Equals(track.Status, "Analyzing", StringComparison.OrdinalIgnoreCase))
                             {
                                 <span class="badge-analyzing">
-                                    <span class="spinner-dot"></span> Analyzujem...
+                                    <span class="spinner-dot"></span> Analyzing
                                 </span>
                             }
-                            else if (track.Status == "Error")
+                            else if (isError)
                             {
-                                <span class="badge-error">Chyba</span>
+                                <span class="badge-error">Error</span>
                             }
                             else
                             {
-                                <span class="badge-pending">Čaká...</span>
+                                <span class="badge-pending">Queued</span>
                             }
                         </td>
-                        <td class="lib-track-title">@track.Title</td>
+                        <td class="lib-track-title">
+                            <div>@track.Title</div>
+                            @if (isError && !string.IsNullOrWhiteSpace(track.LastAnalysisError))
+                            {
+                                <div class="track-inline-error">@track.LastAnalysisError</div>
+                            }
+                        </td>
                         <td class="lib-bpm-cell">@(track.BPM?.ToString("0.0") ?? "--")</td>
                         <td>
                             @if (track.CamelotKey != null)
@@ -77,17 +81,24 @@
                             }
                         </td>
                         <td class="lib-dur-cell">@(track.DurationSeconds > 0 ? TimeSpan.FromSeconds(track.DurationSeconds).ToString(@"mm\:ss") : "--")</td>
+                        <td class="lib-date-cell">@track.AnalysisAttempts</td>
                         <td class="lib-date-cell">@track.CreatedAtUtc.ToLocalTime().ToString("dd.MM.yy HH:mm")</td>
                         <td>
-                            <button class="lib-delete-btn" onclick="deleteTrack('@track.Id', '@track.Title')" title="Vymazať">🗑</button>
+                            <div class="library-actions">
+                                @if (isError)
+                                {
+                                    <button type="button" class="mini-action-btn" onclick="retryTrack('@track.Id', '@track.Title')">Retry</button>
+                                }
+                                <button type="button" class="lib-delete-btn" onclick="deleteTrack('@track.Id', '@track.Title')" title="Delete">&#128465;</button>
+                            </div>
                         </td>
                     </tr>
                 }
                 @if (!Model.Any())
                 {
                     <tr>
-                        <td colspan="7" class="lib-empty-row">
-                            Zatiaľ žiadne skladby. Nahraj svoju prvú stopu a začni mixin'!
+                        <td colspan="8" class="lib-empty-row">
+                            No tracks yet. Upload your first source file and start building your AI-ready library.
                         </td>
                     </tr>
                 }
@@ -99,13 +110,17 @@
 @section Scripts {
 <script>
 async function deleteTrack(id, title) {
-    if (!confirm(`Naozaj chceš vymazať "${title}"?`)) return;
+    if (!confirm(`Delete "${title}"?`)) return;
 
     const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value || '';
     try {
         const res = await fetch(`/Library/delete/${id}`, {
             method: 'POST',
-            headers: { 'RequestVerificationToken': token }
+            headers: {
+                'RequestVerificationToken': token,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({ '__RequestVerificationToken': token }),
         });
         if (res.ok) {
             const row = document.getElementById(`row-${id}`);
@@ -113,10 +128,35 @@ async function deleteTrack(id, title) {
             row.style.opacity = '0';
             setTimeout(() => row.remove(), 300);
         } else {
-            alert('Vymazanie zlyhalo. Skús to znova.');
+            alert('Delete failed. Try again.');
         }
-    } catch(e) {
-        alert('Chyba pri mazaní: ' + e.message);
+    } catch (error) {
+        alert('Delete failed: ' + error.message);
+    }
+}
+
+async function retryTrack(id, title) {
+    if (!confirm(`Retry analysis for "${title}"?`)) return;
+
+    const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value || '';
+    try {
+        const res = await fetch(`/Library/retry/${id}`, {
+            method: 'POST',
+            headers: {
+                'RequestVerificationToken': token,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({ '__RequestVerificationToken': token }),
+        });
+
+        if (!res.ok) {
+            alert('Retry failed. Try again.');
+            return;
+        }
+
+        window.location.reload();
+    } catch (error) {
+        alert('Retry failed: ' + error.message);
     }
 }
 </script>
