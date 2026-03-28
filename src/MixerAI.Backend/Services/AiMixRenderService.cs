@@ -29,11 +29,6 @@ public sealed class AiMixRenderService
         ValidateFile(trackA, "trackA");
         ValidateFile(trackB, "trackB");
 
-        if (!File.Exists(_modelPath))
-        {
-            throw new InvalidOperationException("Trained AI model checkpoint was not found.");
-        }
-
         var renderId = Guid.NewGuid().ToString("N");
         var workingDirectory = Path.Combine(_rendersRoot, renderId);
         Directory.CreateDirectory(workingDirectory);
@@ -45,6 +40,9 @@ public sealed class AiMixRenderService
         await SaveAsync(trackA, trackAPath, cancellationToken);
         await SaveAsync(trackB, trackBPath, cancellationToken);
 
+        // Use trained AI model if available, otherwise fallback to simple crossfade
+        var scriptPath = File.Exists(_modelPath) ? "ai/render_mix.py" : "ai/simple_crossfade_mix.py";
+
         var processStartInfo = new ProcessStartInfo
         {
             FileName = _pythonExecutable,
@@ -55,16 +53,20 @@ public sealed class AiMixRenderService
             CreateNoWindow = true,
         };
 
-        processStartInfo.ArgumentList.Add("ai/render_mix.py");
+        processStartInfo.ArgumentList.Add(scriptPath);
         processStartInfo.ArgumentList.Add("--track-a");
         processStartInfo.ArgumentList.Add(trackAPath);
         processStartInfo.ArgumentList.Add("--track-b");
         processStartInfo.ArgumentList.Add(trackBPath);
-        processStartInfo.ArgumentList.Add("--model-path");
-        processStartInfo.ArgumentList.Add(_modelPath);
         processStartInfo.ArgumentList.Add("--output-path");
         processStartInfo.ArgumentList.Add(outputPath);
-        AppendRenderOptions(processStartInfo, options);
+
+        if (File.Exists(_modelPath))
+        {
+            processStartInfo.ArgumentList.Add("--model-path");
+            processStartInfo.ArgumentList.Add(_modelPath);
+            AppendRenderOptions(processStartInfo, options);
+        }
 
         using var process = Process.Start(processStartInfo)
             ?? throw new InvalidOperationException("Failed to start AI mix render process.");
@@ -92,6 +94,7 @@ public sealed class AiMixRenderService
             Content = await File.ReadAllBytesAsync(outputPath, cancellationToken),
         };
     }
+
 
     public async Task<MixAnalysisResult> AnalyzeAsync(
         IFormFile trackA,
@@ -173,7 +176,10 @@ public sealed class AiMixRenderService
             ".mp3",
             ".wav",
             ".flac",
-            ".aiff"
+            ".aiff",
+            ".mp4",
+            ".m4a",
+            ".ogg"
         };
 
         if (file.Length == 0)
@@ -201,7 +207,18 @@ public sealed class AiMixRenderService
             return "Unknown render error.";
         }
 
-        var normalized = error.Replace("\r", " ").Replace("\n", " ").Trim();
+        var lines = error
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToArray();
+
+        var normalized = lines.LastOrDefault(line =>
+                !line.StartsWith("Traceback", StringComparison.OrdinalIgnoreCase)
+                && !line.StartsWith("File ", StringComparison.Ordinal))
+            ?? lines.LastOrDefault()
+            ?? error.Trim();
+
         if (normalized.Length > 320)
         {
             normalized = normalized[..320] + "...";

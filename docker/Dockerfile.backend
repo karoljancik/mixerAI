@@ -1,0 +1,46 @@
+# Base environment for Python and .NET Runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+WORKDIR /app
+EXPOSE 8080
+
+# Instalacia dalsej infrastruktury: Python a FFmpeg (potrebne pre librosa a spracovanie zvuku)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       python3 \
+       python3-pip \
+       ffmpeg \
+       libsndfile1 \
+       python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Vytvorenie a aktivacia virtualneho Python prostredia v Docker kontajneri
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Symlink python to python3 (kedze v C# volas "python" a nie "python3")
+RUN ln -s /opt/venv/bin/python3 /opt/venv/bin/python || true
+
+# Pre-instalacia ML kniznic (PyTorch, Librosa)
+COPY ai/requirements.txt /app/ai/
+RUN pip install --no-cache-dir -r /app/ai/requirements.txt
+
+# .NET Build stage
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY ["src/MixerAI.Backend/MixerAI.Backend.csproj", "src/MixerAI.Backend/"]
+RUN dotnet restore "src/MixerAI.Backend/MixerAI.Backend.csproj"
+COPY . .
+WORKDIR "/src/src/MixerAI.Backend"
+RUN dotnet build "MixerAI.Backend.csproj" -c Release -o /app/build
+
+FROM build AS publish
+RUN dotnet publish "MixerAI.Backend.csproj" -c Release -o /app/publish
+
+# Spojenie C# binárky a vybudovaneho Python prostredia
+FROM base AS final
+COPY ai/ /app/ai/
+COPY --from=publish /app/publish /app/src/MixerAI.Backend/
+WORKDIR /app/src/MixerAI.Backend
+ENV ASPNETCORE_URLS=http://+:8080
+ENTRYPOINT ["dotnet", "MixerAI.Backend.dll"]

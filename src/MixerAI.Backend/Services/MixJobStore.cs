@@ -1,90 +1,70 @@
-using System.Collections.Concurrent;
-using System.Text.Json;
-using Microsoft.AspNetCore.Http;
+using MixerAI.Backend.Data;
+using MixerAI.Backend.Entities;
 using MixerAI.Backend.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace MixerAI.Backend.Services;
 
-public sealed class MixJobStore
+public class MixJobStore
 {
-    private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".mp3",
-        ".wav",
-        ".flac",
-        ".aiff"
-    };
+    private readonly ApplicationDbContext _db;
+    private readonly AiMixRenderService _renderService;
+    private readonly string _rendersRoot;
 
-    private readonly ConcurrentDictionary<Guid, MixJobRecord> _jobs = new();
-    private readonly string _jobsRoot;
-
-    public MixJobStore(IHostEnvironment environment)
+    public MixJobStore(ApplicationDbContext db, AiMixRenderService renderService, IHostEnvironment env)
     {
-        _jobsRoot = Path.Combine(environment.ContentRootPath, "App_Data", "MixJobs");
-        Directory.CreateDirectory(_jobsRoot);
+        _db = db;
+        _renderService = renderService;
+        _rendersRoot = Path.Combine(env.ContentRootPath, "App_Data", "RenderedMixes");
+        Directory.CreateDirectory(_rendersRoot);
     }
 
-    public MixJobRecord? Get(Guid id) => _jobs.TryGetValue(id, out var job) ? job : null;
-
-    public async Task<MixJobRecord> CreateAsync(
-        string title,
-        IFormFile trackA,
-        IFormFile trackB,
-        CancellationToken cancellationToken)
+    public async Task<MixJobRecord> CreateAsync(string title, Guid trackAId, Guid trackBId, string userId, CancellationToken ct)
     {
-        ValidateFile(trackA, "trackA");
-        ValidateFile(trackB, "trackB");
+        var trackA = await _db.Tracks.FirstAsync(t => t.Id == trackAId && t.UserId == userId, ct);
+        var trackB = await _db.Tracks.FirstAsync(t => t.Id == trackBId && t.UserId == userId, ct);
 
-        var jobId = Guid.NewGuid();
-        var workingDirectory = Path.Combine(_jobsRoot, jobId.ToString("N"));
-        Directory.CreateDirectory(workingDirectory);
-
-        var trackAPath = Path.Combine(workingDirectory, $"track-a{Path.GetExtension(trackA.FileName)}");
-        var trackBPath = Path.Combine(workingDirectory, $"track-b{Path.GetExtension(trackB.FileName)}");
-
-        await SaveAsync(trackA, trackAPath, cancellationToken);
-        await SaveAsync(trackB, trackBPath, cancellationToken);
-
-        var manifestPath = Path.Combine(workingDirectory, "mix-job.json");
-        var job = new MixJobRecord
+        var job = new MixJob
         {
-            Id = jobId,
-            Title = string.IsNullOrWhiteSpace(title) ? $"Mix job {jobId:N}" : title.Trim(),
-            Status = "Uploaded",
+            Id = Guid.NewGuid(),
+            Title = title,
+            TrackAId = trackAId,
+            TrackBId = trackBId,
+            UserId = userId,
             CreatedAtUtc = DateTime.UtcNow,
-            TrackAFileName = Path.GetFileName(trackA.FileName),
-            TrackBFileName = Path.GetFileName(trackB.FileName),
-            WorkingDirectory = workingDirectory,
-            ManifestPath = manifestPath
+            Status = "Queued"
         };
 
-        await File.WriteAllTextAsync(
-            manifestPath,
-            JsonSerializer.Serialize(job, new JsonSerializerOptions { WriteIndented = true }),
-            cancellationToken);
-
-        _jobs[jobId] = job;
-        return job;
+        _db.MixJobs.Add(job);
+        await _db.SaveChangesAsync(ct);
+        
+        return ToRecord(job);
     }
 
-    private static void ValidateFile(IFormFile file, string fieldName)
+    public async Task<MixJobRecord?> GetAsync(Guid id, string userId, CancellationToken ct)
     {
-        if (file.Length == 0)
-        {
-            throw new BadHttpRequestException($"{fieldName} is empty.");
-        }
-
-        var extension = Path.GetExtension(file.FileName);
-        if (!AllowedExtensions.Contains(extension))
-        {
-            throw new BadHttpRequestException($"{fieldName} has unsupported format.");
-        }
+        var job = await _db.MixJobs
+            .Include(j => j.TrackA)
+            .Include(j => j.TrackB)
+            .FirstOrDefaultAsync(j => j.Id == id && j.UserId == userId, ct);
+        
+        return job == null ? null : ToRecord(job);
     }
 
-    private static async Task SaveAsync(IFormFile file, string destinationPath, CancellationToken cancellationToken)
+    public async Task<List<MixJobRecord>> GetUserJobsAsync(string userId, CancellationToken ct)
     {
-        await using var targetStream = File.Create(destinationPath);
-        await using var sourceStream = file.OpenReadStream();
-        await sourceStream.CopyToAsync(targetStream, cancellationToken);
+        var jobs = await _db.MixJobs
+            .Where(j => j.UserId == userId)
+            .OrderByDescending(j => j.CreatedAtUtc)
+            .ToListAsync(ct);
+            
+        return jobs.Select(ToRecord).ToList();
     }
+
+    private static MixJobRecord ToRecord(MixJob j) => new MixJobRecord {
+        Id = j.Id,
+        Title = j.Title,
+        Status = j.Status,
+        CreatedAtUtc = j.CreatedAtUtc
+    };
 }

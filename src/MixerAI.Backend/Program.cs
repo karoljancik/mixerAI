@@ -1,6 +1,12 @@
 using MixerAI.Backend.Models;
 using MixerAI.Backend.Services;
 using MixerAI.Backend.Infrastructure;
+using MixerAI.Backend.Data;
+using MixerAI.Backend.Entities;
+using MixerAI.Backend.Hubs;
+using MixerAI.Backend.Workers;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,17 +18,69 @@ builder.Logging.AddDebug();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
 
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        policy.WithOrigins("http://localhost:5000")
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
+});
+
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSingleton<MixJobStore>();
+
+// --- ZACIATOK AUTENTIFIKACIE A DATABAZY ---
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
+                       ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseNpgsql(connectionString));
+
+// Identity minimal API (Token Bearer / Cookies pre API registráciu a login)
+builder.Services.AddAuthorization();
+builder.Services.AddAuthentication()
+    .AddBearerToken(IdentityConstants.BearerScheme);
+
+builder.Services.AddIdentityCore<ApplicationUser>()
+    .AddEntityFrameworkStores<ApplicationDbContext>()
+    .AddApiEndpoints();
+// --- KONIEC ---
+
+builder.Services.AddScoped<MixJobStore>();
+builder.Services.AddScoped<TrackAnalysisService>();
 builder.Services.AddSingleton<AiInferenceService>();
 builder.Services.AddSingleton<AiMixRenderService>();
 builder.Services.AddSingleton<AiDatasetTrackGenerationService>();
 builder.Services.AddSingleton<AiMiniMixGenerationService>();
 
+// Medior: Background Queue and SignalR
+builder.Services.AddSingleton<IBackgroundTaskQueue>(new BackgroundTaskQueue(100));
+builder.Services.AddHostedService<QueuedHostedService>();
+builder.Services.AddSignalR();
+builder.Services.AddControllers();
+
 var app = builder.Build();
 
-// Medior: Aplikovanie Global Exception Handlera
+// Auto-migracia databazy pri starte kontajnera
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    // db.Database.Migrate(); // Pri medior pozicii beziace na test mozes aj EnsureCreated/Migrate. Tu ho po restarte vytvorime
+    db.Database.EnsureCreated();
+}
+
 app.UseExceptionHandler();
+
+// Middleware pre overovanie totoznosti pred endpointami
+app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapIdentityApi<ApplicationUser>();
+app.MapHub<MixerHub>("/hubs/mixer");
+app.MapControllers();
 
 app.MapGet("/", () => Results.Ok(new
 {
@@ -37,32 +95,39 @@ app.MapGet("/api/health", () => Results.Ok(new
     utc = DateTime.UtcNow
 }));
 
-// Medior: Endpointy uz nepotrebuju try/catch bloky
-app.MapPost("/api/mix-jobs", async (HttpRequest request, MixJobStore jobStore, CancellationToken cancellationToken) =>
+// Medior: Endpointy uz nepotrebuju try/catch bloky, odchyti ich obal.
+// Teraz pridávame aj RequireAuthorization() aby to volal len prihlaseny user
+var apiGroup = app.MapGroup("/api").RequireAuthorization();
+
+apiGroup.MapPost("/mix-jobs", async (MixRequest request, System.Security.Claims.ClaimsPrincipal user, MixJobStore jobStore, CancellationToken cancellationToken) =>
 {
-    if (!request.HasFormContentType)
-        throw new BadHttpRequestException("Expected multipart form data.");
+    var userId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+    if (string.IsNullOrEmpty(userId)) return Results.Unauthorized();
 
-    var form = await request.ReadFormAsync(cancellationToken);
-    var trackA = form.Files["trackA"];
-    var trackB = form.Files["trackB"];
-
-    if (trackA is null || trackB is null)
-        throw new BadHttpRequestException("Both trackA and trackB are required.");
-
-    var title = form["title"].ToString();
-    var job = await jobStore.CreateAsync(title, trackA, trackB, cancellationToken);
-
+    var job = await jobStore.CreateAsync(request.Title, request.TrackAId, request.TrackBId, userId, cancellationToken);
     return Results.Created($"/api/mix-jobs/{job.Id}", job);
 });
 
-app.MapGet("/api/mix-jobs/{id:guid}", (Guid id, MixJobStore jobStore) =>
+
+apiGroup.MapGet("/mix-jobs", async (System.Security.Claims.ClaimsPrincipal user, MixJobStore jobStore, CancellationToken cancellationToken) =>
 {
-    var job = jobStore.Get(id);
+    var userId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+    if (string.IsNullOrEmpty(userId)) return Results.Unauthorized();
+    
+    var jobs = await jobStore.GetUserJobsAsync(userId, cancellationToken);
+    return Results.Ok(jobs);
+});
+
+apiGroup.MapGet("/mix-jobs/{id:guid}", async (Guid id, System.Security.Claims.ClaimsPrincipal user, MixJobStore jobStore, CancellationToken cancellationToken) =>
+{
+    var userId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+    if (string.IsNullOrEmpty(userId)) return Results.Unauthorized();
+
+    var job = await jobStore.GetAsync(id, userId, cancellationToken);
     return job is null ? Results.NotFound() : Results.Ok(job);
 });
 
-app.MapPost("/api/mix/render", async (HttpRequest request, AiMixRenderService renderService, CancellationToken cancellationToken) =>
+apiGroup.MapPost("/mix/render", async (HttpRequest request, AiMixRenderService renderService, CancellationToken cancellationToken) =>
 {
     if (!request.HasFormContentType)
         throw new BadHttpRequestException("Expected multipart form data.");
@@ -84,7 +149,40 @@ app.MapPost("/api/mix/render", async (HttpRequest request, AiMixRenderService re
     return Results.File(result.Content, "audio/mpeg", result.FileName);
 });
 
-app.MapPost("/api/mix/analyze", async (HttpRequest request, AiMixRenderService renderService, CancellationToken cancellationToken) =>
+// NEW: Render mix directly from library track IDs (no re-upload needed)
+apiGroup.MapPost("/mix/render-from-library", async (
+    RenderFromLibraryRequest request,
+    System.Security.Claims.ClaimsPrincipal user,
+    MixerAI.Backend.Data.ApplicationDbContext db,
+    AiMixRenderService renderService,
+    IHostEnvironment env,
+    CancellationToken cancellationToken) =>
+{
+    var userId = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+    if (string.IsNullOrEmpty(userId)) return Results.Unauthorized();
+
+    var trackA = await db.Tracks.FirstOrDefaultAsync(t => t.Id == request.TrackAId && t.UserId == userId, cancellationToken);
+    var trackB = await db.Tracks.FirstOrDefaultAsync(t => t.Id == request.TrackBId && t.UserId == userId, cancellationToken);
+
+    if (trackA == null || trackB == null) return Results.NotFound("One or both tracks were not found.");
+    var uploadPath = Path.Combine(env.ContentRootPath, "App_Data", "UserTracks");
+    
+    var trackAActualPath = TrackStoragePathResolver.ResolvePhysicalPath(uploadPath, trackA.FilePath);
+    var trackBActualPath = TrackStoragePathResolver.ResolvePhysicalPath(uploadPath, trackB.FilePath);
+
+    if (!System.IO.File.Exists(trackAActualPath) || !System.IO.File.Exists(trackBActualPath))
+        return Results.Problem("Track audio files are missing from storage.");
+
+    // Wrap physical files as IFormFile-compatible streams
+    var fileA = new PhysicalFileFormFile(trackAActualPath, trackA.Title);
+    var fileB = new PhysicalFileFormFile(trackBActualPath, trackB.Title);
+
+    var result = await renderService.RenderAsync(fileA, fileB, null, cancellationToken);
+    return Results.File(result.Content, "audio/mpeg", result.FileName);
+});
+
+
+apiGroup.MapPost("/mix/analyze", async (HttpRequest request, AiMixRenderService renderService, CancellationToken cancellationToken) =>
 {
     if (!request.HasFormContentType)
         throw new BadHttpRequestException("Expected multipart form data.");
@@ -100,12 +198,12 @@ app.MapPost("/api/mix/analyze", async (HttpRequest request, AiMixRenderService r
     return Results.Ok(analysis);
 });
 
-app.MapGet("/api/ai/sets", (AiInferenceService inferenceService) =>
+apiGroup.MapGet("/ai/sets", (AiInferenceService inferenceService) =>
 {
     return Results.Ok(inferenceService.GetAvailableSetIds());
 });
 
-app.MapPost("/api/ai/recommendations", async (TransitionRecommendationRequest request, AiInferenceService inferenceService, CancellationToken cancellationToken) =>
+apiGroup.MapPost("/ai/recommendations", async (TransitionRecommendationRequest request, AiInferenceService inferenceService, CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.LeftSetId) || string.IsNullOrWhiteSpace(request.RightSetId))
         throw new BadHttpRequestException("Both LeftSetId and RightSetId are required.");
@@ -114,13 +212,13 @@ app.MapPost("/api/ai/recommendations", async (TransitionRecommendationRequest re
     return Results.Ok(recommendations);
 });
 
-app.MapPost("/api/generate-track", async (GenerateDatasetTrackRequest request, AiDatasetTrackGenerationService generationService, CancellationToken cancellationToken) =>
+apiGroup.MapPost("/generate-track", async (GenerateDatasetTrackRequest request, AiDatasetTrackGenerationService generationService, CancellationToken cancellationToken) =>
 {
     var result = await generationService.GenerateAsync(request, cancellationToken);
     return Results.File(result.Content, "audio/mpeg", result.FileName);
 });
 
-app.MapPost("/api/generate-mini-mix", async ([Microsoft.AspNetCore.Mvc.FromQuery] int? seed, AiMiniMixGenerationService generationService, CancellationToken cancellationToken) =>
+apiGroup.MapPost("/generate-mini-mix", async ([Microsoft.AspNetCore.Mvc.FromQuery] int? seed, AiMiniMixGenerationService generationService, CancellationToken cancellationToken) =>
 {
     var result = await generationService.GenerateMiniMixAsync(seed, cancellationToken);
     return Results.File(result.Content, "audio/mpeg", result.FileName);
@@ -132,4 +230,40 @@ static double? TryReadDouble(string? value)
 {
     if (string.IsNullOrWhiteSpace(value)) return null;
     return double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
+}
+
+public record RenderFromLibraryRequest(Guid TrackAId, Guid TrackBId);
+
+// Adapter: wraps a physical file on disk as IFormFile for AiMixRenderService
+public sealed class PhysicalFileFormFile : IFormFile
+{
+    private readonly string _path;
+    public PhysicalFileFormFile(string path, string displayName)
+    {
+        _path = path;
+        var extension = Path.GetExtension(path);
+        FileName = string.IsNullOrWhiteSpace(extension) ? displayName : $"{displayName}{extension}";
+        Name = "file";
+        ContentType = extension.ToLowerInvariant() switch
+        {
+            ".mp4" or ".m4a" => "audio/mp4",
+            ".wav" => "audio/wav",
+            ".ogg" => "audio/ogg",
+            ".flac" => "audio/flac",
+            ".aiff" => "audio/aiff",
+            _ => "audio/mpeg",
+        };
+        Length = new FileInfo(path).Length;
+        ContentDisposition = $"form-data; name=\"file\"; filename=\"{FileName}\"";
+        Headers = new HeaderDictionary();
+    }
+    public string ContentType { get; }
+    public string ContentDisposition { get; }
+    public IHeaderDictionary Headers { get; }
+    public long Length { get; }
+    public string Name { get; }
+    public string FileName { get; }
+    public Stream OpenReadStream() => System.IO.File.OpenRead(_path);
+    public void CopyTo(Stream target) { using var s = OpenReadStream(); s.CopyTo(target); }
+    public async Task CopyToAsync(Stream target, CancellationToken ct = default) { await using var s = OpenReadStream(); await s.CopyToAsync(target, ct); }
 }

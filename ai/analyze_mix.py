@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import wave
 from array import array
 from pathlib import Path
@@ -14,9 +15,11 @@ from modeling import FEATURE_KEYS, TransitionScorer, build_pair_vector
 from prepare_dataset import build_segments, read_duration_seconds
 from render_mix import (
     choose_best_transition,
+    choose_best_transition_without_model,
     create_normalized_wav,
     extract_features_for_segments,
     refine_transition_candidate,
+    try_load_model_bundle,
 )
 
 
@@ -52,19 +55,35 @@ def main() -> int:
         features_a = extract_features_for_segments(track_a, segments_a, args.sample_rate)
         features_b = extract_features_for_segments(track_b, segments_b, args.sample_rate)
 
-        model, normalization_mean, normalization_std = load_model(Path(args.model_path))
-        candidate = choose_best_transition(
-            segments_a,
-            segments_b,
-            features_a,
-            features_b,
-            model,
-            normalization_mean,
-            normalization_std,
-            preserve_track_a_from_start=True,
-            min_ai_overlay_start_seconds=args.min_ai_overlay_start_seconds,
-            max_ai_overlay_start_seconds=args.max_ai_overlay_start_seconds,
-        )
+        model_bundle = try_load_model_bundle(Path(args.model_path))
+        if model_bundle is None:
+            print(
+                "warning=AI transition model is incompatible with the current feature set; using heuristic fallback.",
+                file=sys.stderr,
+            )
+            candidate = choose_best_transition_without_model(
+                segments_a,
+                segments_b,
+                features_a,
+                features_b,
+                preserve_track_a_from_start=True,
+                min_ai_overlay_start_seconds=args.min_ai_overlay_start_seconds,
+                max_ai_overlay_start_seconds=args.max_ai_overlay_start_seconds,
+            )
+        else:
+            model, normalization_mean, normalization_std = model_bundle
+            candidate = choose_best_transition(
+                segments_a,
+                segments_b,
+                features_a,
+                features_b,
+                model,
+                normalization_mean,
+                normalization_std,
+                preserve_track_a_from_start=True,
+                min_ai_overlay_start_seconds=args.min_ai_overlay_start_seconds,
+                max_ai_overlay_start_seconds=args.max_ai_overlay_start_seconds,
+            )
         candidate = refine_transition_candidate(candidate)
 
         preview_duration = max(
@@ -112,24 +131,6 @@ def main() -> int:
     finally:
         track_a.unlink(missing_ok=True)
         track_b.unlink(missing_ok=True)
-
-
-def load_model(model_path: Path) -> tuple[TransitionScorer, torch.Tensor, torch.Tensor]:
-    checkpoint = torch.load(model_path, map_location="cpu")
-    input_size = len(build_pair_vector([0.0] * len(FEATURE_KEYS), [0.0] * len(FEATURE_KEYS)))
-    model = TransitionScorer(
-        input_size=input_size,
-        hidden_size=int(checkpoint.get("hidden_size", 64)),
-        dropout=float(checkpoint.get("dropout", 0.2)),
-    )
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-
-    normalization_mean = torch.tensor(checkpoint["normalization_mean"], dtype=torch.float32)
-    normalization_std = torch.tensor(checkpoint["normalization_std"], dtype=torch.float32)
-    return model, normalization_mean, normalization_std
-
-
 def build_track_preview(
     label: str,
     wav_path: Path,

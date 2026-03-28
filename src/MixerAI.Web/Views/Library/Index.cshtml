@@ -1,0 +1,124 @@
+@model List<MixerAI.Web.Models.TrackViewModel>
+@{
+    ViewData["Title"] = "Moja Knižnica";
+}
+
+<div class="lib-page">
+
+    <!-- HEADER -->
+    <div class="lib-hero">
+        <span class="eyebrow">Studio Management</span>
+        <h1>Knižnica Skladieb</h1>
+        <p>Tu spravuješ svoje audio stopy. Každá skladba je AI-analyzovaná na BPM a Camelot Key.</p>
+    </div>
+
+    <!-- UPLOAD -->
+    <div class="lib-upload-bar">
+        <form asp-action="Upload" method="post" enctype="multipart/form-data" class="lib-upload-form">
+            <label class="lib-upload-btn" for="trackUpload">
+                ＋ Nahrať skladbu
+            </label>
+            <input type="file" id="trackUpload" name="file" class="d-none"
+                   accept=".mp3,.wav,.flac,.mp4,.m4a,.ogg"
+                   onchange="this.form.submit()" />
+            <span class="lib-upload-hint">MP3 · WAV · FLAC · MP4 · M4A</span>
+        </form>
+        <a href="/" class="lib-studio-btn">🎛 Otvoriť Studio</a>
+    </div>
+
+    <!-- TABLE -->
+    <div class="lib-table-panel">
+        <table class="lib-full-table">
+            <thead>
+                <tr>
+                    <th style="width:110px">Status</th>
+                    <th>Názov Skladby</th>
+                    <th style="width:80px">BPM</th>
+                    <th style="width:60px">Key</th>
+                    <th style="width:70px">Dĺžka</th>
+                    <th style="width:140px">Pridané</th>
+                    <th style="width:60px"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var track in Model)
+                {
+                    <tr id="row-@track.Id">
+                        <td>
+                            @if (track.Status == "Ready")
+                            {
+                                <span class="badge-ready">Pripravené</span>
+                            }
+                            else if (track.Status == "Analyzing")
+                            {
+                                <span class="badge-analyzing">
+                                    <span class="spinner-dot"></span> Analyzujem...
+                                </span>
+                            }
+                            else if (track.Status == "Error")
+                            {
+                                <span class="badge-error">Chyba</span>
+                            }
+                            else
+                            {
+                                <span class="badge-pending">Čaká...</span>
+                            }
+                        </td>
+                        <td class="lib-track-title">@track.Title</td>
+                        <td class="lib-bpm-cell">@(track.BPM?.ToString("0.0") ?? "--")</td>
+                        <td>
+                            @if (track.CamelotKey != null)
+                            {
+                                <span class="camelot-chip">@track.CamelotKey</span>
+                            }
+                            else
+                            {
+                                <span class="text-muted">--</span>
+                            }
+                        </td>
+                        <td class="lib-dur-cell">@(track.DurationSeconds > 0 ? TimeSpan.FromSeconds(track.DurationSeconds).ToString(@"mm\:ss") : "--")</td>
+                        <td class="lib-date-cell">@track.CreatedAtUtc.ToLocalTime().ToString("dd.MM.yy HH:mm")</td>
+                        <td>
+                            <button class="lib-delete-btn" onclick="deleteTrack('@track.Id', '@track.Title')" title="Vymazať">🗑</button>
+                        </td>
+                    </tr>
+                }
+                @if (!Model.Any())
+                {
+                    <tr>
+                        <td colspan="7" class="lib-empty-row">
+                            Zatiaľ žiadne skladby. Nahraj svoju prvú stopu a začni mixin'!
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@section Scripts {
+<script>
+async function deleteTrack(id, title) {
+    if (!confirm(`Naozaj chceš vymazať "${title}"?`)) return;
+
+    const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value || '';
+    try {
+        const res = await fetch(`/Library/delete/${id}`, {
+            method: 'POST',
+            headers: { 'RequestVerificationToken': token }
+        });
+        if (res.ok) {
+            const row = document.getElementById(`row-${id}`);
+            row.style.transition = 'opacity 0.3s';
+            row.style.opacity = '0';
+            setTimeout(() => row.remove(), 300);
+        } else {
+            alert('Vymazanie zlyhalo. Skús to znova.');
+        }
+    } catch(e) {
+        alert('Chyba pri mazaní: ' + e.message);
+    }
+}
+</script>
+@Html.AntiForgeryToken()
+}

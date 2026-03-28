@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -70,31 +71,35 @@ def main() -> int:
         features_a = extract_features_for_segments(track_a, segments_a, args.sample_rate)
         features_b = extract_features_for_segments(track_b, segments_b, args.sample_rate)
 
-        checkpoint = torch.load(args.model_path, map_location="cpu")
-        input_size = len(build_pair_vector([0.0] * len(FEATURE_KEYS), [0.0] * len(FEATURE_KEYS)))
-        model = TransitionScorer(
-            input_size=input_size,
-            hidden_size=int(checkpoint.get("hidden_size", 64)),
-            dropout=float(checkpoint.get("dropout", 0.2)),
-        )
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.eval()
-
-        normalization_mean = torch.tensor(checkpoint["normalization_mean"], dtype=torch.float32)
-        normalization_std = torch.tensor(checkpoint["normalization_std"], dtype=torch.float32)
-
-        candidate = choose_best_transition(
-            segments_a,
-            segments_b,
-            features_a,
-            features_b,
-            model,
-            normalization_mean,
-            normalization_std,
-            preserve_track_a_from_start=args.preserve_track_a_from_start,
-            min_ai_overlay_start_seconds=args.min_ai_overlay_start_seconds,
-            max_ai_overlay_start_seconds=args.max_ai_overlay_start_seconds,
-        )
+        model_bundle = try_load_model_bundle(Path(args.model_path))
+        if model_bundle is None:
+            print(
+                "warning=AI transition model is incompatible with the current feature set; using heuristic fallback.",
+                file=sys.stderr,
+            )
+            candidate = choose_best_transition_without_model(
+                segments_a,
+                segments_b,
+                features_a,
+                features_b,
+                preserve_track_a_from_start=args.preserve_track_a_from_start,
+                min_ai_overlay_start_seconds=args.min_ai_overlay_start_seconds,
+                max_ai_overlay_start_seconds=args.max_ai_overlay_start_seconds,
+            )
+        else:
+            model, normalization_mean, normalization_std = model_bundle
+            candidate = choose_best_transition(
+                segments_a,
+                segments_b,
+                features_a,
+                features_b,
+                model,
+                normalization_mean,
+                normalization_std,
+                preserve_track_a_from_start=args.preserve_track_a_from_start,
+                min_ai_overlay_start_seconds=args.min_ai_overlay_start_seconds,
+                max_ai_overlay_start_seconds=args.max_ai_overlay_start_seconds,
+            )
         candidate = refine_transition_candidate(candidate)
         if args.overlay_start_seconds is not None:
             candidate["overlay_start_seconds"] = round(max(0.0, float(args.overlay_start_seconds)), 3)
@@ -134,6 +139,27 @@ def main() -> int:
         track_b.unlink(missing_ok=True)
 
 
+def try_load_model_bundle(model_path: Path) -> tuple[TransitionScorer, torch.Tensor, torch.Tensor] | None:
+    try:
+        checkpoint = torch.load(model_path, map_location="cpu")
+        input_size = len(build_pair_vector([0.0] * len(FEATURE_KEYS), [0.0] * len(FEATURE_KEYS)))
+        model = TransitionScorer(
+            input_size=input_size,
+            hidden_size=int(checkpoint.get("hidden_size", 64)),
+            dropout=float(checkpoint.get("dropout", 0.2)),
+        )
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model.eval()
+
+        normalization_mean = torch.tensor(checkpoint["normalization_mean"], dtype=torch.float32)
+        normalization_std = torch.tensor(checkpoint["normalization_std"], dtype=torch.float32)
+        if normalization_mean.numel() != input_size or normalization_std.numel() != input_size:
+            raise ValueError("Checkpoint normalization vectors do not match the current input feature size.")
+        return model, normalization_mean, normalization_std
+    except (RuntimeError, KeyError, ValueError, TypeError):
+        return None
+
+
 def extract_features_for_segments(track_path: Path, segments: list, sample_rate: int) -> list[list[float]]:
     features: list[list[float]] = []
     for segment in segments:
@@ -141,7 +167,7 @@ def extract_features_for_segments(track_path: Path, segments: list, sample_rate:
             source_path=track_path,
             start_seconds=float(segment.start_seconds),
             duration_seconds=float(segment.duration_seconds),
-            sample_rate=sample_rate,
+            sr=sample_rate, 
         )
         features.append([float(payload.get(key, 0.0)) for key in FEATURE_KEYS])
     return features
@@ -244,6 +270,97 @@ def choose_best_transition(
         else best_candidate["left_start_seconds"]
     )
     best_candidate["tempo_ratio"] = float(compute_tempo_ratio(best_candidate["right_bpm"], best_candidate["left_bpm"]))
+    return best_candidate
+
+
+def choose_best_transition_without_model(
+    segments_a: list,
+    segments_b: list,
+    features_a: list[list[float]],
+    features_b: list[list[float]],
+    preserve_track_a_from_start: bool,
+    min_ai_overlay_start_seconds: int,
+    max_ai_overlay_start_seconds: int,
+) -> dict:
+    min_ai_overlay_start_seconds = max(0, int(min_ai_overlay_start_seconds))
+    max_ai_overlay_start_seconds = max(min_ai_overlay_start_seconds + 1, int(max_ai_overlay_start_seconds))
+
+    if preserve_track_a_from_start:
+        left_start_threshold_seconds = float(min_ai_overlay_start_seconds)
+        left_end_threshold_seconds = float(max_ai_overlay_start_seconds)
+    else:
+        left_start_threshold_seconds = float(segments_a[len(segments_a) // 3].start_seconds)
+        left_end_threshold_seconds = float(segments_a[max(len(segments_a) // 3, (len(segments_a) * 9) // 10 - 1)].start_seconds)
+
+    right_start_threshold = len(segments_b) // 6
+    right_end_threshold = max(right_start_threshold + 1, (len(segments_b) * 5) // 6)
+    bpm_key_index = FEATURE_KEYS.index("estimated_bpm")
+    best_candidate: dict | None = None
+    best_score = float("-inf")
+
+    for left_index, left_segment in enumerate(segments_a):
+        left_start_seconds = float(left_segment.start_seconds)
+        if left_start_seconds < left_start_threshold_seconds or left_start_seconds > left_end_threshold_seconds:
+            continue
+
+        for right_index, right_segment in enumerate(segments_b):
+            if right_index < right_start_threshold or right_index > right_end_threshold:
+                continue
+
+            left_bpm = float(features_a[left_index][bpm_key_index])
+            right_bpm = float(features_b[right_index][bpm_key_index])
+            if left_bpm <= 0 or right_bpm <= 0:
+                continue
+
+            right_start_seconds = float(right_segment.start_seconds)
+            rhythm_score = combined_transition_rhythm_score(
+                left_start_seconds,
+                right_start_seconds,
+                left_bpm,
+                right_bpm,
+            )
+            tempo_ratio = compute_tempo_ratio(right_bpm, left_bpm)
+            tempo_penalty = min(abs(1.0 - float(tempo_ratio)), 1.0)
+
+            if preserve_track_a_from_start:
+                transition_bias = compute_intro_overlay_bias(
+                    left_start_seconds,
+                    right_start_seconds,
+                    segments_b[-1].end_seconds,
+                    min_ai_overlay_start_seconds,
+                    max_ai_overlay_start_seconds,
+                )
+            else:
+                transition_bias = compute_mid_mix_bias(
+                    left_start_seconds,
+                    right_start_seconds,
+                    segments_a[-1].end_seconds,
+                    segments_b[-1].end_seconds,
+                )
+
+            combined_score = (0.7 * rhythm_score) + (0.2 * transition_bias) + (0.1 * (1.0 - tempo_penalty))
+            if combined_score <= best_score:
+                continue
+
+            best_score = combined_score
+            best_candidate = {
+                "left_start_seconds": left_start_seconds,
+                "right_start_seconds": right_start_seconds,
+                "left_bpm": left_bpm,
+                "right_bpm": right_bpm,
+                "probability": float(combined_score),
+                "model_probability": 0.0,
+                "overlay_start_seconds": (
+                    snap_to_bar_grid(left_start_seconds, left_bpm)
+                    if preserve_track_a_from_start
+                    else left_start_seconds
+                ),
+                "tempo_ratio": float(tempo_ratio),
+            }
+
+    if best_candidate is None:
+        raise RuntimeError("No valid heuristic transition candidates were generated.")
+
     return best_candidate
 
 

@@ -17,12 +17,25 @@ public class HomeController : Controller
     }
 
     [HttpGet]
-    public IActionResult Index()
+    public async Task<IActionResult> Index()
     {
-        return View(new MixStudioViewModel
+        var tracks = await _backendClient.GetTracksAsync();
+        return View(tracks);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RenderMix([FromForm] Guid trackAId, [FromForm] Guid trackBId, CancellationToken cancellationToken)
+    {
+        try
         {
-            ErrorMessage = TempData[GenerationErrorTempDataKey] as string
-        });
+            var result = await _backendClient.RenderMixFromLibraryAsync(trackAId, trackBId, cancellationToken);
+            return File(result, "audio/mpeg", "mixerai-mix.mp3");
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
     [HttpPost]

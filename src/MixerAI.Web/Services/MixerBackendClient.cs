@@ -10,13 +10,105 @@ namespace MixerAI.Web.Services;
 public sealed class MixerBackendClient
 {
     private readonly HttpClient _httpClient;
+    private readonly Microsoft.AspNetCore.Http.IHttpContextAccessor _httpContextAccessor;
 
-    public MixerBackendClient(HttpClient httpClient, IOptions<BackendApiOptions> options)
+    public MixerBackendClient(HttpClient httpClient, IOptions<BackendApiOptions> options, Microsoft.AspNetCore.Http.IHttpContextAccessor httpContextAccessor)
     {
         _httpClient = httpClient;
         _httpClient.BaseAddress = new Uri(options.Value.BaseUrl);
+        _httpContextAccessor = httpContextAccessor;
+
+        var token = _httpContextAccessor.HttpContext?.User.FindFirst("AccessToken")?.Value;
+        if (!string.IsNullOrEmpty(token))
+        {
+            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        }
     }
 
+    public async Task<bool> RegisterAsync(string email, string password)
+    {
+        var payload = new { email, password };
+        var response = await _httpClient.PostAsJsonAsync("/register", payload);
+        return response.IsSuccessStatusCode;
+    }
+
+    public sealed record LoginResponse(bool IsSuccess, string Token = "");
+
+    public async Task<LoginResponse> LoginAsync(string email, string password)
+    {
+        var payload = new { email, password };
+        var response = await _httpClient.PostAsJsonAsync("/login?useCookies=false", payload);
+        
+        if (!response.IsSuccessStatusCode)
+            return new LoginResponse(false);
+
+        var result = await response.Content.ReadFromJsonAsync<IdentityLoginResult>();
+        return new LoginResponse(true, result?.AccessToken ?? "");
+    }
+
+    private sealed record IdentityLoginResult(string AccessToken);
+
+    // --- LIBRARY OPERATIONS ---
+    public async Task<List<TrackViewModel>> GetTracksAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.GetAsync("/api/tracks", cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<List<TrackViewModel>>(cancellationToken) ?? [];
+    }
+
+    public async Task<TrackViewModel> UploadTrackAsync(IFormFile file, CancellationToken cancellationToken = default)
+    {
+        using var content = new MultipartFormDataContent();
+        content.Add(await CreateFileContentAsync(file, cancellationToken), "file", file.FileName);
+        
+        using var response = await _httpClient.PostAsync("/api/tracks/upload", content, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        
+        return await response.Content.ReadFromJsonAsync<TrackViewModel>(cancellationToken) 
+               ?? throw new InvalidOperationException("Empty response from track upload.");
+    }
+
+    public string GetTrackFileUrl(Guid trackId) => $"{_httpClient.BaseAddress}api/tracks/{trackId}/file";
+
+    public async Task<bool> DeleteTrackAsync(Guid trackId, CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.DeleteAsync($"/api/tracks/{trackId}", cancellationToken);
+        return response.IsSuccessStatusCode;
+    }
+
+    public async Task<(Stream Stream, string ContentType)?> GetTrackAudioStreamAsync(Guid trackId, CancellationToken cancellationToken = default)
+    {
+        var response = await _httpClient.GetAsync($"/api/tracks/{trackId}/file", HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (!response.IsSuccessStatusCode) return null;
+        
+        var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var contentType = response.Content.Headers.ContentType?.MediaType ?? "audio/mpeg";
+        return (stream, contentType);
+    }
+
+    // Legacy bytes-only variant kept for internal use
+    public async Task<byte[]?> GetTrackAudioBytesAsync(Guid trackId, CancellationToken cancellationToken = default)
+    {
+        var result = await GetTrackAudioStreamAsync(trackId, cancellationToken);
+        if (result == null) return null;
+        using var ms = new MemoryStream();
+        await result.Value.Stream.CopyToAsync(ms, cancellationToken);
+        return ms.ToArray();
+    }
+
+    public async Task<byte[]> RenderMixFromLibraryAsync(Guid trackAId, Guid trackBId, CancellationToken cancellationToken = default)
+    {
+        var payload = new { trackAId, trackBId };
+        using var response = await _httpClient.PostAsJsonAsync("/api/mix/render-from-library", payload, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException(ParseBackendError(error));
+        }
+        return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+    }
+    
+    // --- MIX JOB OPERATIONS ---
     public async Task<MixJobResultViewModel> CreateMixJobAsync(
         string title,
         IFormFile trackA,
