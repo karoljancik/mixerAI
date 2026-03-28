@@ -14,6 +14,8 @@ from beat_sync import beat_period_seconds
 from modeling import FEATURE_KEYS, TransitionScorer, build_pair_vector
 from prepare_dataset import build_segments, read_duration_seconds
 from render_mix import (
+    analyze_track_structure,
+    build_transition_plan,
     choose_best_transition,
     choose_best_transition_without_model,
     create_normalized_wav,
@@ -85,23 +87,35 @@ def main() -> int:
                 max_ai_overlay_start_seconds=args.max_ai_overlay_start_seconds,
             )
         candidate = refine_transition_candidate(candidate)
+        structure_a = analyze_track_structure(track_a, args.sample_rate)
+        structure_b = analyze_track_structure(track_b, args.sample_rate)
+        transition_plan = build_transition_plan(
+            candidate,
+            structure_a,
+            structure_b,
+            preserve_track_a_from_start=True,
+            min_ai_overlay_start_seconds=args.min_ai_overlay_start_seconds,
+            max_ai_overlay_start_seconds=args.max_ai_overlay_start_seconds,
+        )
 
         preview_duration = max(
             60.0,
-            float(candidate["overlay_start_seconds"]) + float(args.overlay_seconds) + float(args.track_b_tail_seconds),
+            float(transition_plan["overlay_start_seconds"]) + float(args.overlay_seconds) + float(args.track_b_tail_seconds),
         )
         left_preview_duration = min(preview_duration, duration_a)
         right_preview_duration = min(max(30.0, float(args.overlay_seconds) + float(args.track_b_tail_seconds)), duration_b)
 
         payload = {
             "recommendation": {
-                "overlay_start_seconds": round(float(candidate["overlay_start_seconds"]), 3),
-                "right_start_seconds": round(float(candidate["right_start_seconds"]), 3),
-                "left_bpm": round(float(candidate["left_bpm"]), 3),
-                "right_bpm": round(float(candidate["right_bpm"]), 3),
-                "tempo_ratio": round(float(candidate["tempo_ratio"]), 6),
-                "model_probability": round(float(candidate["model_probability"]), 6),
-                "probability": round(float(candidate["probability"]), 6),
+                "overlay_start_seconds": round(float(transition_plan["overlay_start_seconds"]), 3),
+                "transition_cue_seconds": round(float(transition_plan["transition_cue_seconds"]), 3),
+                "right_start_seconds": round(float(transition_plan["right_start_seconds"]), 3),
+                "transition_style": transition_plan["style"],
+                "left_bpm": round(float(transition_plan["left_bpm"]), 3),
+                "right_bpm": round(float(transition_plan["right_bpm"]), 3),
+                "tempo_ratio": round(float(transition_plan["tempo_ratio"]), 6),
+                "model_probability": round(float(transition_plan["model_probability"]), 6),
+                "probability": round(float(transition_plan["probability"]), 6),
             },
             "trackA": build_track_preview(
                 label="Track A",
@@ -109,17 +123,17 @@ def main() -> int:
                 duration_seconds=duration_a,
                 preview_start_seconds=0.0,
                 preview_duration_seconds=left_preview_duration,
-                bpm=float(candidate["left_bpm"]),
+                bpm=float(transition_plan["left_bpm"]),
                 timeline_offset_seconds=0.0,
             ),
             "trackB": build_track_preview(
                 label="Track B",
                 wav_path=track_b,
                 duration_seconds=duration_b,
-                preview_start_seconds=float(candidate["right_start_seconds"]),
+                preview_start_seconds=float(transition_plan["right_start_seconds"]),
                 preview_duration_seconds=right_preview_duration,
-                bpm=float(candidate["right_bpm"]),
-                timeline_offset_seconds=float(candidate["overlay_start_seconds"]),
+                bpm=float(transition_plan["right_bpm"]),
+                timeline_offset_seconds=float(transition_plan["overlay_start_seconds"]),
             ),
         }
 

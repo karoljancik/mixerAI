@@ -131,24 +131,6 @@
 }
 .deck-b-unit { border-right: none; border-left: 1px solid var(--studio-border); }
 
-.track-selector-bar {
-  margin-bottom: 10px;
-}
-.track-select {
-  width: 100%;
-  background: #0d0f12;
-  border: 1px solid var(--studio-border);
-  color: var(--studio-text);
-  border-radius: 4px;
-  padding: 5px 8px;
-  font-size: 11px;
-  font-family: 'Inter', sans-serif;
-  outline: none;
-  cursor: pointer;
-}
-.track-select:focus { border-color: var(--deck-a); }
-.deck-b-unit .track-select:focus { border-color: var(--deck-b); }
-
 .deck-body {
   display: flex;
   align-items: center;

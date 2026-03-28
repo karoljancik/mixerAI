@@ -4,7 +4,6 @@
     Layout = "_StudioLayout";
 }
 
-<!-- WAVEFORM BAR - TOP - also acts as drop zones -->
 <div class="studio-waveform-bar">
     <div class="waveform-track deck-a-color" id="drop-zone-a"
          ondragover="event.preventDefault(); this.classList.add('drop-hover-a')"
@@ -22,24 +21,11 @@
     </div>
 </div>
 
-<!-- MAIN DECK AREA -->
 <div class="studio-main">
-    <!-- DECK A -->
     <div class="deck-unit deck-a-unit"
          ondragover="event.preventDefault(); this.style.boxShadow='0 0 0 2px var(--deck-a)'"
          ondragleave="this.style.boxShadow=''"
          ondrop="handleDrop(event, 'a'); this.style.boxShadow=''">
-        <div class="track-selector-bar">
-            <select id="select-track-a" onchange="loadTrack('a', this.value)" class="track-select">
-                <option value="">─ Vyber / Pretiahni track ─</option>
-                @foreach (var t in Model.Where(x => x.Status == "Ready"))
-                {
-                    <option value="@t.Id" data-bpm="@(t.BPM?.ToString("0.0") ?? "--")" data-key="@(t.CamelotKey ?? "--")" data-title="@t.Title" data-waveform="@t.WaveformDataJson" data-duration="@t.DurationSeconds">
-                        @t.Title  (@(t.BPM?.ToString("0.0") ?? "--") BPM · @(t.CamelotKey ?? "--"))
-                    </option>
-                }
-            </select>
-        </div>
         <div class="deck-body">
             <div class="deck-meta">
                 <div class="track-name" id="title-a">No Track Loaded</div>
@@ -54,45 +40,32 @@
             </div>
         </div>
         <div class="deck-controls-bar">
-            <button class="ctrl-btn" onclick="wavesurferA.skip(-5)" title="–5s">⏮</button>
+            <button class="ctrl-btn" onclick="wavesurferA.skip(-5)" title="-5s">⏮</button>
             <button class="ctrl-btn play-btn" id="btn-play-a" onclick="togglePlay('a')" title="Play/Pause">▶</button>
             <button class="ctrl-btn" onclick="wavesurferA.stop()" title="Stop">■</button>
         </div>
     </div>
 
-    <!-- CENTER MIXER -->
     <div class="mixer-center">
         <div class="mixer-label">MIXER</div>
-        <div class="crossfader-container">
+        <div class="crossfader-container" title="Preview crossfader for live deck playback only. It does not affect the generated mix.">
             <div class="crossfader-label">CF</div>
             <input type="range" id="crossfader" min="0" max="100" value="50" class="crossfader-slider" oninput="updateCrossfade(this.value)" />
         </div>
         <div class="ai-copilot" id="ai-advice">
-            <div class="ai-copilot-header">🤖 AI CO-PILOT</div>
-            <div id="advice-text" class="ai-advice-text">Načítaj skladby do oboch deckov.</div>
+            <div class="ai-copilot-header">AI CO-PILOT</div>
+            <div id="advice-text" class="ai-advice-text">Natiahni skladby do oboch deckov.</div>
         </div>
         <button id="render-btn" class="render-btn" onclick="renderMix()">
-            <span id="render-btn-text">⚡ GENERATE MIX</span>
+            <span id="render-btn-text">GENERATE MIX</span>
         </button>
         <div id="render-result" class="render-result" style="display:none;"></div>
     </div>
 
-    <!-- DECK B -->
     <div class="deck-unit deck-b-unit"
          ondragover="event.preventDefault(); this.style.boxShadow='0 0 0 2px var(--deck-b)'"
          ondragleave="this.style.boxShadow=''"
          ondrop="handleDrop(event, 'b'); this.style.boxShadow=''">
-        <div class="track-selector-bar">
-            <select id="select-track-b" onchange="loadTrack('b', this.value)" class="track-select">
-                <option value="">─ Vyber / Pretiahni track ─</option>
-                @foreach (var t in Model.Where(x => x.Status == "Ready"))
-                {
-                    <option value="@t.Id" data-bpm="@(t.BPM?.ToString("0.0") ?? "--")" data-key="@(t.CamelotKey ?? "--")" data-title="@t.Title" data-waveform="@t.WaveformDataJson" data-duration="@t.DurationSeconds">
-                        @t.Title  (@(t.BPM?.ToString("0.0") ?? "--") BPM · @(t.CamelotKey ?? "--"))
-                    </option>
-                }
-            </select>
-        </div>
         <div class="deck-body">
             <div class="deck-meta">
                 <div class="track-name" id="title-b">No Track Loaded</div>
@@ -107,17 +80,16 @@
             </div>
         </div>
         <div class="deck-controls-bar">
-            <button class="ctrl-btn" onclick="wavesurferB.skip(-5)" title="–5s">⏮</button>
+            <button class="ctrl-btn" onclick="wavesurferB.skip(-5)" title="-5s">⏮</button>
             <button class="ctrl-btn play-btn" id="btn-play-b" onclick="togglePlay('b')" title="Play/Pause">▶</button>
             <button class="ctrl-btn" onclick="wavesurferB.stop()" title="Stop">■</button>
         </div>
     </div>
 </div>
 
-<!-- TRACK LIBRARY (mini) -->
 <div class="studio-library">
     <div class="library-header">
-        <span class="eyebrow">📁 KNIŽNICA — pretiahni track na deck</span>
+        <span class="eyebrow">KNIŽNICA — pretiahni track na deck</span>
         <a href="/Library" class="library-manage-btn">SPRAVOVAŤ</a>
     </div>
     <div class="library-table-wrap">
@@ -191,11 +163,6 @@
 </style>
 <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
 <script>
-// ════════════════════════════════════════
-//  MixerAI PRO — Studio Engine v3 (Pro Clean)
-// ════════════════════════════════════════
-
-// ── Shared WaveSurfer Config ──
 const wsBaseConfig = {
     height: 70,
     barWidth: 2,
@@ -235,28 +202,41 @@ const wavesurferB = WaveSurfer.create({
     ...buildDeckWaveConfig('b'),
 });
 
-// ── State ──
 let stateA = { id: null, playing: false, bpm: null, key: null };
 let stateB = { id: null, playing: false, bpm: null, key: null };
-let vinylAngleA = 0, vinylAngleB = 0;
+let vinylAngleA = 0;
+let vinylAngleB = 0;
 
-// ── Vinyl spin ──
 function animateVinyls() {
-    if (stateA.playing) { vinylAngleA += 2.0; document.getElementById('vinyl-a').style.transform = `rotate(${vinylAngleA}deg)`; }
-    if (stateB.playing) { vinylAngleB += 2.0; document.getElementById('vinyl-b').style.transform = `rotate(${vinylAngleB}deg)`; }
+    if (stateA.playing) {
+        vinylAngleA += 2.0;
+        document.getElementById('vinyl-a').style.transform = `rotate(${vinylAngleA}deg)`;
+    }
+    if (stateB.playing) {
+        vinylAngleB += 2.0;
+        document.getElementById('vinyl-b').style.transform = `rotate(${vinylAngleB}deg)`;
+    }
     requestAnimationFrame(animateVinyls);
 }
 requestAnimationFrame(animateVinyls);
 
-// ── WaveSurfer events ──
-[ [wavesurferA, 'a'], [wavesurferB, 'b'] ].forEach(([ws, d]) => {
-    ws.on('timeupdate', t => { document.getElementById(`time-${d}`).textContent = formatTime(t); });
-    ws.on('play',   () => { if(d==='a') stateA.playing=true; else stateB.playing=true; updatePlayBtn(d, true); });
-    ws.on('pause',  () => { if(d==='a') stateA.playing=false; else stateB.playing=false; updatePlayBtn(d, false); });
-    ws.on('finish', () => { if(d==='a') stateA.playing=false; else stateB.playing=false; updatePlayBtn(d, false); });
-    ws.on('error',  e => {
-        console.error(`WaveSurfer ERROR for DECK ${d.toUpperCase()}:`, e);
-        document.getElementById(`title-${d}`).innerHTML = `<span style="color:var(--danger)">⚠️ Súbor nenájdený (${e.name || "Error"})</span>`;
+[[wavesurferA, 'a'], [wavesurferB, 'b']].forEach(([ws, deck]) => {
+    ws.on('timeupdate', time => { document.getElementById(`time-${deck}`).textContent = formatTime(time); });
+    ws.on('play', () => {
+        if (deck === 'a') stateA.playing = true; else stateB.playing = true;
+        updatePlayBtn(deck, true);
+    });
+    ws.on('pause', () => {
+        if (deck === 'a') stateA.playing = false; else stateB.playing = false;
+        updatePlayBtn(deck, false);
+    });
+    ws.on('finish', () => {
+        if (deck === 'a') stateA.playing = false; else stateB.playing = false;
+        updatePlayBtn(deck, false);
+    });
+    ws.on('error', error => {
+        console.error(`WaveSurfer ERROR for DECK ${deck.toUpperCase()}:`, error);
+        document.getElementById(`title-${deck}`).innerHTML = `<span style="color:var(--danger)">Súbor nenájdený (${error.name || 'Error'})</span>`;
     });
 });
 
@@ -264,51 +244,54 @@ function updatePlayBtn(deck, playing) {
     document.getElementById(`btn-play-${deck}`).textContent = playing ? '⏸' : '▶';
     document.getElementById(`vinyl-icon-${deck}`).textContent = playing ? '⏸' : '▶';
 }
-function formatTime(s) {
-    return `${Math.floor(s/60)}:${Math.floor(s%60).toString().padStart(2,'0')}`;
+
+function formatTime(seconds) {
+    return `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
 }
 
-function loadTrack(deck, trackId, fromRow) {
+function loadTrack(deck, trackId) {
     if (!trackId) return;
-    let bpm, key, title, waveformRaw, duration;
 
-    if (fromRow) {
-        const row = document.querySelector(`.library-row[data-id="${trackId}"]`);
-        if (!row) return;
-        bpm = row.dataset.bpm; key = row.dataset.key; title = row.dataset.title; waveformRaw = row.dataset.waveform; duration = row.dataset.duration;
-        const sel = document.getElementById(`select-track-${deck}`);
-        if (sel) {
-            for (let opt of sel.options) { if (opt.value === trackId) { sel.value = trackId; break; } }
-        }
+    const row = document.querySelector(`.library-row[data-id="${trackId}"]`);
+    if (!row) return;
+
+    const bpm = row.dataset.bpm;
+    const key = row.dataset.key;
+    const title = row.dataset.title;
+    const waveformRaw = row.dataset.waveform;
+    const duration = row.dataset.duration;
+
+    if (deck === 'a') {
+        stateA.id = trackId;
+        stateA.bpm = parseFloat(bpm);
+        stateA.key = key;
     } else {
-        const sel = document.getElementById(`select-track-${deck}`);
-        const opt = sel.options[sel.selectedIndex];
-        if (!opt || !opt.value) return;
-        bpm = opt.dataset.bpm; key = opt.dataset.key; title = opt.dataset.title; waveformRaw = opt.dataset.waveform; duration = opt.dataset.duration;
+        stateB.id = trackId;
+        stateB.bpm = parseFloat(bpm);
+        stateB.key = key;
     }
-
-    if (deck === 'a') { stateA.id = trackId; stateA.bpm = parseFloat(bpm); stateA.key = key; }
-    else              { stateB.id = trackId; stateB.bpm = parseFloat(bpm); stateB.key = key; }
 
     document.getElementById(`title-${deck}`).textContent = title || 'Unknown';
     document.getElementById(`bpm-${deck}`).textContent = `${bpm} BPM`;
     document.getElementById(`key-${deck}`).textContent = key || '--';
 
-    // Highlight active row
-    document.querySelectorAll('.library-row').forEach(r => r.classList.remove(`active-${deck}`));
-    const row = document.querySelector(`.library-row[data-id="${trackId}"]`);
-    if (row) row.classList.add(`active-${deck}`);
+    document.querySelectorAll('.library-row').forEach(rowElement => rowElement.classList.remove(`active-${deck}`));
+    row.classList.add(`active-${deck}`);
 
-    // Load audio — proxy URL
     const ws = deck === 'a' ? wavesurferA : wavesurferB;
-    // Force cache busting for audio URL to avoid browser showing stale 404
     const audioUrl = `/Library/audio/${trackId}?v=${Date.now()}`;
-    
+
     let peaks = null;
-    try { if (waveformRaw && waveformRaw.length > 2) peaks = JSON.parse(waveformRaw); } catch(e) {}
+    try {
+        if (waveformRaw && waveformRaw.length > 2) {
+            peaks = JSON.parse(waveformRaw);
+        }
+    } catch (error) {
+        console.warn('Failed to parse waveform peaks.', error);
+    }
 
     if (peaks && peaks.length > 0 && duration && parseFloat(duration) > 0) {
-        ws.load(audioUrl, peaks, parseFloat(duration)); 
+        ws.load(audioUrl, peaks, parseFloat(duration));
     } else {
         ws.load(audioUrl);
     }
@@ -316,9 +299,10 @@ function loadTrack(deck, trackId, fromRow) {
     updateAiAdvice();
 }
 
-function loadFromLib(deck, trackId) { loadTrack(deck, trackId, true); }
+function loadFromLib(deck, trackId) {
+    loadTrack(deck, trackId);
+}
 
-// ── Drag & Drop ──
 function handleDragStart(event, trackId) {
     event.currentTarget.classList.add('is-dragging');
     event.dataTransfer.effectAllowed = 'copy';
@@ -329,100 +313,113 @@ function handleDrop(event, deck) {
     event.preventDefault();
     const id = event.dataTransfer.getData('trackId');
     document.getElementById(`drop-zone-${deck}`)?.classList.remove(`drop-hover-${deck}`);
-    if (id) loadTrack(deck, id, true);
+    if (id) loadTrack(deck, id);
 }
 
-// ── Playback & Controls ──
-function togglePlay(deck) { (deck === 'a' ? wavesurferA : wavesurferB).playPause(); }
-function updateCrossfade(val) {
-    wavesurferA.setVolume((100 - val) / 100);
-    wavesurferB.setVolume(val / 100);
+function togglePlay(deck) {
+    (deck === 'a' ? wavesurferA : wavesurferB).playPause();
 }
 
-// ── AI Co-Pilot ──
+function updateCrossfade(value) {
+    wavesurferA.setVolume((100 - value) / 100);
+    wavesurferB.setVolume(value / 100);
+}
+
 function updateAiAdvice() {
-    const el = document.getElementById('advice-text');
-    if (!stateA.id || !stateB.id) { el.innerHTML = 'Načítaj skladby do oboch deckov.'; return; }
+    const advice = document.getElementById('advice-text');
+    if (!stateA.id || !stateB.id) {
+        advice.innerHTML = 'Natiahni skladby do oboch deckov.';
+        return;
+    }
 
-    let msgs = [];
+    const messages = [];
     if (!isNaN(stateA.bpm) && !isNaN(stateB.bpm)) {
         const diff = Math.abs(stateA.bpm - stateB.bpm).toFixed(1);
-        if (diff <= 3)      msgs.push(`✅ <b>BPM OK:</b> ${stateA.bpm} vs ${stateB.bpm}`);
-        else if (diff <= 8) msgs.push(`⚠️ <b>BPM ±${diff}:</b> Mierne odlišné, skús nudge.`);
-        else                msgs.push(`🔴 <b>BPM CLASH ±${diff}:</b> Potrebuješ SYNC!`);
+        if (diff <= 3) messages.push(`BPM OK: <b>${stateA.bpm}</b> vs <b>${stateB.bpm}</b>`);
+        else if (diff <= 8) messages.push(`BPM rozdiel ${diff}: chce to jemný sync.`);
+        else messages.push(`Veľký BPM rozdiel ${diff}: render bude musieť viac stretchnúť track B.`);
     }
+
     if (stateA.key && stateB.key && stateA.key !== '--' && stateB.key !== '--') {
-        const nA = parseInt(stateA.key), nB = parseInt(stateB.key);
-        if (stateA.key === stateB.key) msgs.push(`✨ <b>Perfektná tónina:</b> Oba v ${stateA.key}!`);
-        else {
-            const adj = (Math.abs(nA - nB) <= 1 || Math.abs(nA - nB) === 11) && stateA.key.slice(-1) === stateB.key.slice(-1);
-            const rel = stateA.key.slice(-1) !== stateB.key.slice(-1) && nA === nB;
-            if (adj || rel) msgs.push(`🟡 <b>Kompatibilná tónina:</b> ${stateA.key} → ${stateB.key} (Camelot OK).`);
-            else            msgs.push(`🔴 <b>Tónina neladí:</b> ${stateA.key} vs ${stateB.key}.`);
+        if (stateA.key === stateB.key) {
+            messages.push(`Tónina sedí: oba tracky sú v <b>${stateA.key}</b>.`);
+        } else {
+            messages.push(`Tóniny: <b>${stateA.key}</b> a <b>${stateB.key}</b>.`);
         }
     }
-    el.innerHTML = msgs.join('<br>') || 'Analyzujem...';
+
+    advice.innerHTML = messages.join('<br>') || 'Analyzujem prechod...';
 }
 
-// ── Delete ──
 async function deleteTrackFromMini(id, title) {
     if (!confirm(`Naozaj chceš vymazať "${title}"?`)) return;
     const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value || '';
     try {
-        const res = await fetch(`/Library/delete/${id}`, {
+        const response = await fetch(`/Library/delete/${id}`, {
             method: 'POST',
-            headers: { 'RequestVerificationToken': token, 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({ '__RequestVerificationToken': token })
+            headers: {
+                'RequestVerificationToken': token,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({ '__RequestVerificationToken': token }),
         });
-        if (res.ok) {
-            const row = document.getElementById(`lib-row-${id}`);
-            if (row) {
-                row.style.transition = 'opacity 0.3s, transform 0.3s';
-                row.style.opacity = '0';
-                row.style.transform = 'translateX(-20px)';
-                setTimeout(() => row.remove(), 300);
-            }
-        } else alert('Vymazanie zlyhalo.');
-    } catch(e) { alert('Chyba: ' + e.message); }
+        if (!response.ok) {
+            alert('Vymazanie zlyhalo.');
+            return;
+        }
+
+        const row = document.getElementById(`lib-row-${id}`);
+        if (row) {
+            row.style.transition = 'opacity 0.3s, transform 0.3s';
+            row.style.opacity = '0';
+            row.style.transform = 'translateX(-20px)';
+            setTimeout(() => row.remove(), 300);
+        }
+    } catch (error) {
+        alert(`Chyba: ${error.message}`);
+    }
 }
 
-// ── Render Mix ──
 async function renderMix() {
     if (!stateA.id || !stateB.id) {
-        document.getElementById('advice-text').innerHTML = '⚠️ Zvoľ skladby pre oba decky!'; return;
+        document.getElementById('advice-text').innerHTML = 'Zvoľ skladby pre oba decky.';
+        return;
     }
+
     const btn = document.getElementById('render-btn');
     const btnText = document.getElementById('render-btn-text');
     const resultDiv = document.getElementById('render-result');
     btn.disabled = true;
-    btnText.innerHTML = '⏳ Generujem mix... (~60 sek)';
+    btnText.textContent = 'GENERUJEM MIX...';
     resultDiv.style.display = 'none';
 
     try {
         const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value || '';
-        const fd = new FormData();
-        fd.append('trackAId', stateA.id);
-        fd.append('trackBId', stateB.id);
-        fd.append('__RequestVerificationToken', token);
+        const formData = new FormData();
+        formData.append('trackAId', stateA.id);
+        formData.append('trackBId', stateB.id);
+        formData.append('__RequestVerificationToken', token);
 
-        const response = await fetch('/Home/RenderMix', { method: 'POST', body: fd });
-        if (!response.ok) throw new Error((await response.text()).substring(0, 200));
+        const response = await fetch('/Home/RenderMix', { method: 'POST', body: formData });
+        if (!response.ok) {
+            throw new Error((await response.text()).substring(0, 220));
+        }
 
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
         resultDiv.style.display = 'block';
         resultDiv.innerHTML = `
             <div class="render-success">
-                ✅ Mix hotový!
+                Mix hotový.
                 <audio controls src="${url}" class="render-audio"></audio>
-                <a href="${url}" download="mixerai-mix.mp3">⬇ Stiahnuť MP3</a>
+                <a href="${url}" download="mixerai-mix.mp3">Stiahnuť MP3</a>
             </div>`;
-    } catch(e) {
+    } catch (error) {
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = `<div class="render-error">❌ ${e.message}</div>`;
+        resultDiv.innerHTML = `<div class="render-error">${error.message}</div>`;
     } finally {
         btn.disabled = false;
-        btnText.innerHTML = '⚡ GENERATE MIX';
+        btnText.textContent = 'GENERATE MIX';
     }
 }
 </script>

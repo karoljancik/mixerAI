@@ -10,14 +10,17 @@ def normalize_dnb_bpm(bpm: float) -> float:
     if bpm <= 0:
         return 0.0
 
-    normalized = float(bpm)
-    # DnB is typically 170-175. If we get ~87, it's half-time. If we get ~260, it's 1.5x or similar.
-    while normalized < DNB_MIN_BPM - 10:
-        normalized *= 2.0
-    while normalized > DNB_MAX_BPM + 20:
-        normalized /= 2.0
+    base_bpm = float(bpm)
+    preferred_center = 172.0
+    lower_bound = DNB_MIN_BPM - 10.0
+    upper_bound = DNB_MAX_BPM + 20.0
+    candidates = [base_bpm * (2.0 ** shift) for shift in range(-2, 3)]
+    in_range_candidates = [candidate for candidate in candidates if lower_bound <= candidate <= upper_bound]
 
-    return normalized
+    if in_range_candidates:
+        return min(in_range_candidates, key=lambda candidate: abs(candidate - preferred_center))
+
+    return min(candidates, key=lambda candidate: abs(candidate - preferred_center))
 
 
 def compute_tempo_ratio(source_bpm: float, target_bpm: float) -> float:
