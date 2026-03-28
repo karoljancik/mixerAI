@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MixerAI.Backend/MixerAI.Backend.csproj" />
+    <Project Path="src/MixerAI.Web/MixerAI.Web.csproj" />
+  </Folder>
+</Solution>

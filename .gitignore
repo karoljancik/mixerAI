@@ -1,0 +1,26 @@
+# .NET / C#
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# AI & Data
+data/raw_sets/
+data/processed/
+.tmp/
+*.mp3
+*.wav
+*.flac
+ai/generated/
+
+# OS generated files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,14 @@
+{
+  "dataset_name": "dnb_sets_v1",
+  "raw_sets_dir": "data/raw_sets",
+  "manifests_dir": "data/manifests",
+  "window_seconds": 30,
+  "hop_seconds": 15,
+  "negative_gap_windows": 8,
+  "allowed_extensions": [
+    ".mp3",
+    ".wav",
+    ".flac",
+    ".aiff"
+  ]
+}

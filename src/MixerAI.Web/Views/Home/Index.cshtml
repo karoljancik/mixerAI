@@ -1,0 +1,83 @@
+@model MixerAI.Web.Models.MixStudioViewModel
+@{
+    ViewData["Title"] = "BeatMix";
+}
+
+<section class="hero-panel">
+    <div class="hero-copy">
+        <span class="eyebrow">BeatMix</span>
+        <h1>DnB song generator.</h1>
+        <p>
+            Generate a new beta track from the trained dataset pipeline. Choose only `liquid` or `deep`.
+        </p>
+    </div>
+</section>
+
+<section class="single-panel">
+    <div class="mix-form-panel">
+        <h2>Generate DnB Track</h2>
+        <p class="section-copy">
+            Beta generator: prefers the latent-audio generator when latent checkpoints are available. Otherwise it falls back to the phrase/procedural path instead of stitching exported dataset clips together at render time.
+        </p>
+        <p class="section-copy">
+            Longer tracks can take a few minutes to render on CPU, especially around 150-240 seconds.
+        </p>
+
+        @if (!string.IsNullOrWhiteSpace(Model.ErrorMessage))
+        {
+            <div class="alert alert-danger" role="alert">@Model.ErrorMessage</div>
+        }
+
+        <form asp-action="GenerateTrack" method="post" class="mix-form">
+            <div class="generation-grid">
+                <div class="mb-3">
+                    <label asp-for="GeneratedTrackStyle" class="form-label"></label>
+                    <select asp-for="GeneratedTrackStyle" class="form-control">
+                        <option value="liquid">Liquid</option>
+                        <option value="deep">Deep</option>
+                    </select>
+                    <span asp-validation-for="GeneratedTrackStyle" class="text-danger"></span>
+                </div>
+
+                <div class="mb-3">
+                    <label asp-for="GeneratedTrackDurationSeconds" class="form-label"></label>
+                    <input asp-for="GeneratedTrackDurationSeconds" type="number" min="96" max="240" step="6" class="form-control" />
+                    <span asp-validation-for="GeneratedTrackDurationSeconds" class="text-danger"></span>
+                </div>
+
+                <div class="mb-3">
+                    <label asp-for="GeneratedTrackSeed" class="form-label"></label>
+                    <input asp-for="GeneratedTrackSeed" type="number" min="1" step="1" class="form-control" />
+                    <span asp-validation-for="GeneratedTrackSeed" class="text-danger"></span>
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-accent">Generate Song (AI Model)</button>
+        </form>
+    </div>
+
+    <hr style="margin-top: 3rem; margin-bottom: 3rem; border-color: rgba(255,255,255,0.1);" />
+
+    <div class="mix-form-panel">
+        <h2>Generate 1:30 DJ Mini-Mix</h2>
+        <p class="section-copy">
+            Beta AI pipeline automatically selects 3 tracks from the raw_sets dataset, slices them into 30-second clips, syncs their BPM seamlessly through time-stretching, aligns the downbeats precisely, and crossfades them to create a ready-to-go 1:30 mix.
+        </p>
+
+        <form asp-action="GenerateMiniMix" method="post" class="mix-form">
+            <div class="generation-grid">
+                <div class="mb-3">
+                    <label asp-for="GeneratedTrackSeed" class="form-label"></label>
+                    <input asp-for="GeneratedTrackSeed" type="number" min="1" step="1" class="form-control" />
+                    <span asp-validation-for="GeneratedTrackSeed" class="text-danger"></span>
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-accent" style="background-color: #8c52ff;">Generate 1:30 Mini-Mix</button>
+        </form>
+    </div>
+</section>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}
