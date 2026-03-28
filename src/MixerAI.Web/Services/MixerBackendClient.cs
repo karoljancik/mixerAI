@@ -174,14 +174,10 @@ public sealed class MixerBackendClient
         return prefix + normalized;
     }
 
-    private static async Task<StreamContent> CreateFileContentAsync(IFormFile file, CancellationToken cancellationToken)
+    private static Task<StreamContent> CreateFileContentAsync(IFormFile file, CancellationToken cancellationToken)
     {
-        var stream = new MemoryStream();
-        await file.CopyToAsync(stream, cancellationToken);
-        stream.Position = 0;
-
-        var content = new StreamContent(stream);
-        content.Headers.ContentType = new(file.ContentType == string.Empty ? "application/octet-stream" : file.ContentType);
-        return content;
+        var content = new StreamContent(file.OpenReadStream());
+        content.Headers.ContentType = new(string.IsNullOrEmpty(file.ContentType) ? "application/octet-stream" : file.ContentType);
+        return Task.FromResult(content);
     }
 }

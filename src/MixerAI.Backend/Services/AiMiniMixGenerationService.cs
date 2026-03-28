@@ -49,7 +49,24 @@ public sealed class AiMiniMixGenerationService
         using var process = Process.Start(processStartInfo)
             ?? throw new InvalidOperationException("Failed to start mini mix generation process.");
 
-        await process.WaitForExitAsync(cancellationToken);
+        // Medior level: Registracia CancellationTokenu, aby sa Python proces zastavil, ak sa zrusi HTTP poziadavka 
+        using var registration = cancellationToken.Register(() =>
+        {
+            if (!process.HasExited)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+            }
+        });
+
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (TaskCanceledException)
+        {
+            throw new InvalidOperationException("Poziadavka bola zrusena klientom zatial co prebiehalo generovanie (Python proces bol ukonceny).");
+        }
+
         if (process.ExitCode != 0)
         {
             var error = await process.StandardError.ReadToEndAsync(cancellationToken);
