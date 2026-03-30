@@ -47,6 +47,7 @@ internal sealed class FakeMixerBackendClient : IMixerBackendClient
     public byte[] RenderedMix { get; set; } = [1, 2, 3];
     public (byte[] Content, string FileName) GeneratedTrack { get; set; } = ([4, 5, 6], "generated.mp3");
     public (byte[] Content, string FileName) GeneratedMiniMix { get; set; } = ([7, 8, 9], "minimix.mp3");
+    public MixAnalysisResultViewModel MixAnalysisResult { get; set; } = new();
     public int UploadCalls { get; private set; }
     public int GenerateTrackCalls { get; private set; }
 
@@ -99,6 +100,12 @@ internal sealed class FakeMixerBackendClient : IMixerBackendClient
 
     public Task<(byte[] Content, string FileName)> GenerateMiniMixAsync(int? seed, CancellationToken cancellationToken)
         => Task.FromResult(GeneratedMiniMix);
+
+    public Task<MixAnalysisResultViewModel> AnalyzeMixAsync(
+        IFormFile trackA,
+        IFormFile trackB,
+        CancellationToken cancellationToken)
+        => Task.FromResult(MixAnalysisResult);
 }
 
 internal sealed class TestTempDataProvider : ITempDataProvider

@@ -1,57 +1,65 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MixerAI.Web.Contracts;
 using MixerAI.Web.Services;
 
 namespace MixerAI.Web.Controllers;
 
+[ApiController]
 [Authorize]
-public class LibraryController : Controller
+[Route("api/bff/library")]
+public sealed class LibraryController : ControllerBase
 {
-    private readonly IMixerBackendClient _backend;
+    private readonly IMixerBackendClient _backendClient;
 
-    public LibraryController(IMixerBackendClient backend)
+    public LibraryController(IMixerBackendClient backendClient)
     {
-        _backend = backend;
+        _backendClient = backendClient;
     }
 
-    public async Task<IActionResult> Index()
+    [HttpGet]
+    public async Task<IActionResult> GetTracks(CancellationToken cancellationToken)
     {
-        var tracks = await _backend.GetTracksAsync();
-        return View(tracks);
+        return Ok(await _backendClient.GetTracksAsync(cancellationToken));
     }
 
-    [HttpPost]
-    public async Task<IActionResult> Upload(IFormFile file)
+    [HttpPost("upload")]
+    public async Task<IActionResult> Upload([FromForm] IFormFile? file, CancellationToken cancellationToken)
     {
-        if (file == null || file.Length == 0) return RedirectToAction(nameof(Index));
-        await _backend.UploadTrackAsync(file);
-        return RedirectToAction(nameof(Index));
+        if (file is null || file.Length == 0)
+        {
+            return BadRequest(new ApiErrorResponse
+            {
+                Error = "Choose an audio file before uploading."
+            });
+        }
+
+        var createdTrack = await _backendClient.UploadTrackAsync(file, cancellationToken);
+        return CreatedAtAction(nameof(GetTracks), new { id = createdTrack.Id }, createdTrack);
     }
 
-    [HttpPost("/Library/delete/{id:guid}")]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Delete(Guid id)
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
-        var ok = await _backend.DeleteTrackAsync(id);
-        return ok ? Ok() : NotFound();
+        var deleted = await _backendClient.DeleteTrackAsync(id, cancellationToken);
+        return deleted ? NoContent() : NotFound();
     }
 
-    [HttpPost("/Library/retry/{id:guid}")]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Retry(Guid id)
+    [HttpPost("{id:guid}/retry-analysis")]
+    public async Task<IActionResult> Retry(Guid id, CancellationToken cancellationToken)
     {
-        var ok = await _backend.RetryTrackAnalysisAsync(id);
-        return ok ? Accepted() : BadRequest();
+        var accepted = await _backendClient.RetryTrackAnalysisAsync(id, cancellationToken);
+        return accepted ? Accepted() : BadRequest();
     }
 
-    /// <summary>
-    /// Same-origin audio proxy — avoids CORS by serving audio from port 5000 instead of 8080.
-    /// </summary>
-    [HttpGet("/Library/audio/{id:guid}")]
+    [HttpGet("audio/{id:guid}")]
     public async Task<IActionResult> GetAudio(Guid id, CancellationToken cancellationToken)
     {
-        var result = await _backend.GetTrackAudioStreamAsync(id, cancellationToken);
-        if (result == null) return NotFound();
+        var result = await _backendClient.GetTrackAudioStreamAsync(id, cancellationToken);
+        if (result == null)
+        {
+            return NotFound();
+        }
 
         Response.Headers["Accept-Ranges"] = "bytes";
         Response.Headers["Cache-Control"] = "private, max-age=3600";

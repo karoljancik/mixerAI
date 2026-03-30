@@ -24,4 +24,8 @@ public interface IMixerBackendClient
     Task<(byte[] Content, string FileName)> GenerateMiniMixAsync(
         int? seed,
         CancellationToken cancellationToken);
+    Task<MixAnalysisResultViewModel> AnalyzeMixAsync(
+        IFormFile trackA,
+        IFormFile trackB,
+        CancellationToken cancellationToken);
 }

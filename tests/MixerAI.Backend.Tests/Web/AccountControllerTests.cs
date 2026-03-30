@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using MixerAI.Web.Contracts;
 using MixerAI.Web.Controllers;
 using MixerAI.Web.Services;
 
@@ -18,15 +19,21 @@ public class AccountControllerTests
                 TestHelpers.CreateUnsignedJwt("user-123", "dj@example.com", "DJ Nova"))
         };
 
-        var controller = new AccountController(backend);
+        var controller = new AuthController(backend);
         var httpContext = TestHelpers.CreateHttpContext();
         httpContext.RequestServices = serviceProvider;
         controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
 
-        var result = await controller.Login("dj@example.com", "secret", "/workspace");
+        var result = await controller.Login(new LoginRequest
+        {
+            Email = "dj@example.com",
+            Password = "secret123"
+        });
 
-        var redirect = Assert.IsType<LocalRedirectResult>(result);
-        Assert.Equal("/workspace", redirect.Url);
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var session = Assert.IsType<SessionResponse>(ok.Value);
+        Assert.True(session.IsAuthenticated);
+        Assert.Equal("DJ Nova", session.DisplayName);
         Assert.NotNull(authService.SignedInPrincipal);
         Assert.Equal("user-123", authService.SignedInPrincipal!.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value);
         Assert.Equal("dj@example.com", authService.SignedInPrincipal.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value);

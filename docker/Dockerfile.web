@@ -1,3 +1,16 @@
+FROM node:22-alpine AS client-build
+WORKDIR /src/src/MixerAI.Web/ClientApp
+COPY ["src/MixerAI.Web/ClientApp/package.json", "./package.json"]
+COPY ["src/MixerAI.Web/ClientApp/package-lock.json", "./package-lock.json"]
+COPY ["src/MixerAI.Web/ClientApp/tsconfig.json", "./tsconfig.json"]
+COPY ["src/MixerAI.Web/ClientApp/tsconfig.app.json", "./tsconfig.app.json"]
+COPY ["src/MixerAI.Web/ClientApp/tsconfig.node.json", "./tsconfig.node.json"]
+COPY ["src/MixerAI.Web/ClientApp/vite.config.ts", "./vite.config.ts"]
+COPY ["src/MixerAI.Web/ClientApp/index.html", "./index.html"]
+RUN npm ci
+COPY ["src/MixerAI.Web/ClientApp/src", "./src"]
+RUN npm run build
+
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
 WORKDIR /app
 EXPOSE 80
@@ -7,6 +20,7 @@ WORKDIR /src
 COPY ["src/MixerAI.Web/MixerAI.Web.csproj", "src/MixerAI.Web/"]
 RUN dotnet restore "src/MixerAI.Web/MixerAI.Web.csproj"
 COPY . .
+COPY --from=client-build /src/src/MixerAI.Web/wwwroot ./src/MixerAI.Web/wwwroot
 WORKDIR "/src/src/MixerAI.Web"
 RUN dotnet build "MixerAI.Web.csproj" -c Release -o /app/build
 

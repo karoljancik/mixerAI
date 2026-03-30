@@ -1,13 +1,15 @@
 using Microsoft.AspNetCore.Mvc;
+using MixerAI.Web.Contracts;
 using MixerAI.Web.Controllers;
 using MixerAI.Web.Models;
+using MixerAI.Web.Workspace;
 
 namespace MixerAI.Backend.Tests.Web;
 
 public class HomeControllerTests
 {
     [Fact]
-    public async Task Index_ReturnsWorkspaceModelWithTracksAndSetIds()
+    public async Task GetWorkspace_ReturnsSnapshotWithTracksAndSetIds()
     {
         var backend = new FakeMixerBackendClient
         {
@@ -19,36 +21,13 @@ public class HomeControllerTests
         };
         var controller = CreateController(backend);
 
-        var result = await controller.Index(CancellationToken.None);
+        var result = await controller.GetWorkspace(CancellationToken.None);
 
-        var view = Assert.IsType<ViewResult>(result);
-        var model = Assert.IsType<StudioWorkspaceViewModel>(view.Model);
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var model = Assert.IsType<WorkspaceSnapshotResponse>(ok.Value);
         Assert.Single(model.Tracks);
         Assert.Equal(2, model.AvailableSetIds.Count);
-        Assert.Equal("Set One", model.Recommendation.LeftSetId);
-    }
-
-    [Fact]
-    public async Task GenerateTrack_InvalidModel_ReturnsIndexViewWithWorkspaceModel()
-    {
-        var backend = new FakeMixerBackendClient
-        {
-            Tracks = [new TrackViewModel { Id = Guid.NewGuid(), Title = "Track A", Status = "Ready" }],
-            SetIds = ["Set One", "Set Two"]
-        };
-        var controller = CreateController(backend);
-
-        var result = await controller.GenerateTrack(new MixStudioViewModel
-        {
-            GeneratedTrackStyle = "liquid",
-            GeneratedTrackDurationSeconds = 12
-        }, CancellationToken.None);
-
-        var view = Assert.IsType<ViewResult>(result);
-        Assert.Equal("Index", view.ViewName);
-        var model = Assert.IsType<StudioWorkspaceViewModel>(view.Model);
-        Assert.Equal(0, backend.GenerateTrackCalls);
-        Assert.Equal(12, model.Generation.GeneratedTrackDurationSeconds);
+        Assert.Equal(1, model.ReadyTrackCount);
     }
 
     [Fact]
@@ -56,8 +35,6 @@ public class HomeControllerTests
     {
         var backend = new FakeMixerBackendClient
         {
-            Tracks = [],
-            SetIds = ["Set One", "Set Two"],
             Recommendations =
             [
                 new TransitionRecommendationViewModel
@@ -79,10 +56,10 @@ public class HomeControllerTests
             TopK = 3
         }, CancellationToken.None);
 
-        var view = Assert.IsType<ViewResult>(result);
-        var model = Assert.IsType<StudioWorkspaceViewModel>(view.Model);
-        Assert.Single(model.RecommendationResults);
-        Assert.Equal(0.81, model.RecommendationResults[0].Probability);
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var model = Assert.IsAssignableFrom<IReadOnlyList<TransitionRecommendationViewModel>>(ok.Value);
+        Assert.Single(model);
+        Assert.Equal(0.81, model[0].Probability);
     }
 
     [Fact]
@@ -94,19 +71,24 @@ public class HomeControllerTests
         };
         var controller = CreateController(backend);
 
-        var result = await controller.RenderMix(Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None);
+        var result = await controller.RenderMix(new RenderMixRequest
+        {
+            TrackAId = Guid.NewGuid(),
+            TrackBId = Guid.NewGuid()
+        }, CancellationToken.None);
 
         var file = Assert.IsType<FileContentResult>(result);
         Assert.Equal("audio/mpeg", file.ContentType);
         Assert.Equal([9, 8, 7], file.FileContents);
     }
 
-    private static HomeController CreateController(FakeMixerBackendClient backend)
+    private static WorkspaceController CreateController(FakeMixerBackendClient backend)
     {
-        var controller = new HomeController(backend);
-        var httpContext = TestHelpers.CreateHttpContext();
-        controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
-        controller.TempData = TestHelpers.CreateTempData(httpContext);
+        var controller = new WorkspaceController(backend, new WorkspaceSnapshotBuilder(backend));
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = TestHelpers.CreateHttpContext()
+        };
         return controller;
     }
 }

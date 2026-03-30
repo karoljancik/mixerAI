@@ -10,26 +10,36 @@ public class LibraryWebControllerTests
     public async Task Retry_ReturnsAcceptedWhenBackendAccepts()
     {
         var backend = new FakeMixerBackendClient { RetryTrackAnalysisResult = true };
-        var controller = new LibraryController(backend);
+        var controller = CreateController(backend);
 
-        var result = await controller.Retry(Guid.NewGuid());
+        var result = await controller.Retry(Guid.NewGuid(), CancellationToken.None);
 
         Assert.IsType<AcceptedResult>(result);
     }
 
     [Fact]
-    public async Task Upload_RedirectsToIndexAndCallsBackend()
+    public async Task Upload_ReturnsCreatedAndCallsBackend()
     {
         var backend = new FakeMixerBackendClient();
-        var controller = new LibraryController(backend);
+        var controller = CreateController(backend);
 
         await using var stream = new MemoryStream([1, 2, 3]);
         IFormFile file = new FormFile(stream, 0, stream.Length, "file", "idea.mp3");
 
-        var result = await controller.Upload(file);
+        var result = await controller.Upload(file, CancellationToken.None);
 
-        var redirect = Assert.IsType<RedirectToActionResult>(result);
-        Assert.Equal("Index", redirect.ActionName);
+        Assert.IsType<CreatedAtActionResult>(result);
         Assert.Equal(1, backend.UploadCalls);
+    }
+
+    private static LibraryController CreateController(FakeMixerBackendClient backend)
+    {
+        return new LibraryController(backend)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = TestHelpers.CreateHttpContext()
+            }
+        };
     }
 }
