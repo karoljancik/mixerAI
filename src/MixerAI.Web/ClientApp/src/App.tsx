@@ -1,231 +1,27 @@
+// @ts-nocheck
 import { startTransition, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { api } from "./api";
 import { WaveformCanvas } from "./components/WaveformCanvas";
+import { Knob } from "./components/Knob";
 import type {
   MixAnalysisResult,
+  RenderMixRequest,
   SessionResponse,
   Track,
   TransitionRecommendation,
   TransitionRecommendationRequest,
+  WaveformBands,
   WorkspaceSnapshot,
 } from "./types";
 
 type AuthMode = "login" | "register";
-type Language = "sk" | "en";
 
 type AuthFormState = {
   email: string;
   password: string;
 };
 
-const techPills = ["ASP.NET Core BFF", "React + TypeScript", "Python audio AI", "Portfolio demo"];
-
-const copy = {
-  sk: {
-    language: "Jazyk",
-    loadingTitle: "Načítavam DJ workspace",
-    loadingBody: "Overujem session a pripravujem štúdio.",
-    landingEyebrow: "AI DJ learning workspace",
-    landingTitle: "Trénuj základy mixovania v prostredí inšpirovanom rekordbox workflow.",
-    landingBody:
-      "Nahraj tracky, vyber Deck A a Deck B, sleduj BPM a key fit, nechaj si poradiť kedy spustiť Track B a vygeneruj si automatický mix z dvoch trackov.",
-    landingCards: [
-      ["Nahraj knižnicu", "Backend dopočíta BPM, key a waveform dáta."],
-      ["Nacvič prechod", "Porovnaj decky a skús si vlastný crossfade."],
-      ["Porovnaj sa s AI", "Získaj cue timing a referenčný auto-mix."],
-    ],
-    landingFeatures: [
-      ["Beginner deck view", "Dva decky, waveformy a lokálny crossfader bez zbytočného balastu."],
-      ["AI cue guidance", "Model navrhne, kde je dobré pustiť Track B do Tracku A."],
-      ["Automatic mix", "Stiahni si referenčný mix z dvoch vybraných trackov."],
-    ],
-    authTitle: "Vstup do štúdia",
-    authBody: "Portfólio ostáva technické, ale produktový obsah je teraz zameraný na učenie DJ základov.",
-    signIn: "Prihlásiť",
-    createAccount: "Vytvoriť účet",
-    openWorkspace: "Otvoriť workspace",
-    createDemoAccount: "Vytvoriť demo účet",
-    email: "Email",
-    password: "Heslo",
-    passwordPlaceholder: "Aspoň 6 znakov",
-    topbarEyebrow: "AI-assisted DJ portfolio app",
-    studioTitle: "MixerAI Studio",
-    heroTitle: (name: string) => `${name}, toto je tvoje vedené mixovacie štúdio.`,
-    heroBody:
-      "Frontend je uprataný na to podstatné pre začiatočníka: library, decky, AI navigácia načasovania a automatické generovanie mixu.",
-    heroCards: [
-      ["1. Vyber decky", "Najprv si priprav dvojicu trackov, ktorú chceš skúšať mixovať."],
-      ["2. Sleduj AI radu", "Pozri si BPM, key a odporúčaný moment na vstup Tracku B."],
-      ["3. Stiahni referenciu", "Porovnaj vlastný prechod s automaticky vygenerovaným mixom."],
-    ],
-    stackTitle: "Portfolio stack",
-    stackBody: "Same-origin React SPA nad ASP.NET Core BFF vrstvou a Python audio pipeline.",
-    readyTracks: "Pripravené tracky",
-    needsAttention: "Na kontrolu",
-    referenceSets: "Referenčné sety",
-    refresh: "Obnoviť dáta",
-    refreshing: "Obnovujem...",
-    signOut: "Odhlásiť",
-    signedInAs: "Prihlásený ako",
-    mixCoach: "Mix coach",
-    mixCoachTitle: "Vyber dva tracky a nacvič si prechod",
-    mixCoachBody: "Tu sa sústreďuje hlavný rekordbox-like flow: výber deckov, timing rady a auto-mix.",
-    mixCoachEmpty: "Nahraj a analyzuj aspoň dva tracky, aby sa odomkol plný guided workflow.",
-    deckA: "Deck A",
-    deckB: "Deck B",
-    chooseTrack: "Vyber pripravený track",
-    noTrack: "Žiadny track nie je načítaný",
-    noArtist: "Interpret zatiaľ nie je dostupný",
-    crossfaderTitle: "Crossfader preview",
-    crossfaderBody: "Lokálne si nastav pomer deckov ešte pred generovaním mixu.",
-    adviceTitle: "AI timing guidance",
-    renderHint: "Ber to ako referenciu k tréningu, nie náhradu za vlastné rozhodovanie.",
-    renderMix: "Vygenerovať automatický mix",
-    renderingMix: "Renderujem automatický mix...",
-    planner: "AI cue planner",
-    plannerTitle: "Použi referenčné sety na odhad handover momentu",
-    plannerBody: "Model zoradí kandidátov z korpusu a pomôže ti pochopiť, kde blend pravdepodobne zafunguje.",
-    leftSet: "Referenčný set A",
-    rightSet: "Referenčný set B",
-    chooseSet: "Vyber set",
-    topCandidates: "Počet kandidátov",
-    findCues: "Nájsť cue body",
-    findingCues: "Počítam odporúčania...",
-    fit: "Zhoda",
-    noRecommendations: "Spusť AI cue planner a zobraz si odporúčané prechodové okná.",
-    basics: "Mixing basics",
-    basicsTitle: "Na čo sa sústrediť",
-    basicsBody: "Krátke praktické tipy podľa vybraných trackov.",
-    analyzer: "Transition analyzer",
-    analyzerTitle: "Skontroluj dva súbory ešte pred pridaním do knižnice",
-    analyzerBody: "Získaš BPM, beat markery a odporúčaný overlay bez nutnosti najprv všetko uploadovať.",
-    analyze: "Analyzovať prechod",
-    analyzing: "Analyzujem...",
-    analyzerEmpty: "Nahraj dva tracky a zobrazí sa BPM detekcia, waveform preview aj odporúčaný bod prekrytia.",
-    overlayStart: "Začiatok overlay-u",
-    modelConfidence: "Istota modelu",
-    trackABpm: "BPM Tracku A",
-    trackBBpm: "BPM Tracku B",
-    previewLength: (seconds: string) => `Dĺžka preview ${seconds}`,
-    suggestedSource: (seconds: string) => `Odporúčaný vstup Tracku B ${seconds}`,
-    library: "Library",
-    libraryTitle: "Správa trackov pre demo flow",
-    libraryBody: "Len dôležité operácie: upload, monitoring analýzy a rýchle poslanie tracku na deck.",
-    uploadAudio: "Nahrať audio",
-    table: ["Stav", "Názov", "BPM", "Key", "Dĺžka", "Pokusy", "Pridané", "Akcie"],
-    emptyTable: "Nahraj prvý track a spusti celý guided workflow.",
-    retry: "Skúsiť znova",
-    delete: "Vymazať",
-    ready: "Pripravené",
-    analyzingStatus: "Analyzuje sa",
-    attention: "Vyžaduje pozornosť",
-    queued: "V rade",
-    working: "Spracovávam...",
-  },
-  en: {
-    language: "Language",
-    loadingTitle: "Loading DJ workspace",
-    loadingBody: "Checking your session and preparing the studio.",
-    landingEyebrow: "AI DJ learning workspace",
-    landingTitle: "Learn the basics of mixing in a rekordbox-inspired workflow.",
-    landingBody:
-      "Upload tracks, choose Deck A and Deck B, compare BPM and key fit, get help with when to launch Track B, and render an automatic mix from two tracks.",
-    landingCards: [
-      ["Build the library", "The backend extracts BPM, key and waveform data."],
-      ["Practice transitions", "Compare the decks and test your own crossfade."],
-      ["Compare with AI", "Get cue timing and a reference auto-mix."],
-    ],
-    landingFeatures: [
-      ["Beginner deck view", "Two decks, waveforms and a local crossfader without extra clutter."],
-      ["AI cue guidance", "The model suggests where Track B should enter Track A."],
-      ["Automatic mix", "Download a reference mix from the two selected tracks."],
-    ],
-    authTitle: "Enter the studio",
-    authBody: "The portfolio remains technical, but the product surface is now centered on learning DJ fundamentals.",
-    signIn: "Sign in",
-    createAccount: "Create account",
-    openWorkspace: "Open workspace",
-    createDemoAccount: "Create demo account",
-    email: "Email",
-    password: "Password",
-    passwordPlaceholder: "At least 6 characters",
-    topbarEyebrow: "AI-assisted DJ portfolio app",
-    studioTitle: "MixerAI Studio",
-    heroTitle: (name: string) => `${name}, here is your guided mixing studio.`,
-    heroBody:
-      "The frontend now focuses on what matters for a beginner: library prep, decks, AI timing guidance and automatic mix generation.",
-    heroCards: [
-      ["1. Choose the decks", "Prepare the pair of tracks you want to practice with."],
-      ["2. Follow the AI guidance", "Review BPM, key and the suggested entry point for Track B."],
-      ["3. Download the reference", "Compare your transition with the generated mix."],
-    ],
-    stackTitle: "Portfolio stack",
-    stackBody: "A same-origin React SPA on top of an ASP.NET Core BFF and Python audio pipeline.",
-    readyTracks: "Ready tracks",
-    needsAttention: "Needs attention",
-    referenceSets: "Reference sets",
-    refresh: "Refresh data",
-    refreshing: "Refreshing...",
-    signOut: "Sign out",
-    signedInAs: "Signed in as",
-    mixCoach: "Mix coach",
-    mixCoachTitle: "Choose two tracks and practice the transition",
-    mixCoachBody: "This is the main rekordbox-like flow: deck selection, timing guidance and auto-mix.",
-    mixCoachEmpty: "Upload and analyze at least two tracks to unlock the full guided workflow.",
-    deckA: "Deck A",
-    deckB: "Deck B",
-    chooseTrack: "Choose a ready track",
-    noTrack: "No track loaded",
-    noArtist: "Artist metadata pending",
-    crossfaderTitle: "Crossfader preview",
-    crossfaderBody: "Balance the deck levels locally before generating the mix.",
-    adviceTitle: "AI timing guidance",
-    renderHint: "Treat it as a practice reference, not a replacement for your own ears.",
-    renderMix: "Generate automatic mix",
-    renderingMix: "Rendering automatic mix...",
-    planner: "AI cue planner",
-    plannerTitle: "Use reference sets to estimate the handover moment",
-    plannerBody: "The model ranks candidates from the corpus and helps explain where a blend is likely to work.",
-    leftSet: "Reference set A",
-    rightSet: "Reference set B",
-    chooseSet: "Choose a set",
-    topCandidates: "Top candidates",
-    findCues: "Find cue points",
-    findingCues: "Ranking transitions...",
-    fit: "Fit",
-    noRecommendations: "Run the AI cue planner to surface likely transition windows.",
-    basics: "Mixing basics",
-    basicsTitle: "What to focus on",
-    basicsBody: "A few practical tips based on the selected tracks.",
-    analyzer: "Transition analyzer",
-    analyzerTitle: "Inspect two files before adding them to the library",
-    analyzerBody: "You get BPM, beat markers and a suggested overlay without uploading everything first.",
-    analyze: "Analyze transition",
-    analyzing: "Analyzing...",
-    analyzerEmpty: "Upload two tracks to see BPM detection, waveform preview and the suggested overlap point.",
-    overlayStart: "Overlay start",
-    modelConfidence: "Model confidence",
-    trackABpm: "Track A BPM",
-    trackBBpm: "Track B BPM",
-    previewLength: (seconds: string) => `Preview length ${seconds}`,
-    suggestedSource: (seconds: string) => `Suggested Track B source ${seconds}`,
-    library: "Library",
-    libraryTitle: "Manage the tracks behind the demo flow",
-    libraryBody: "Only the important operations remain: upload, analysis monitoring and quick deck assignment.",
-    uploadAudio: "Upload audio",
-    table: ["Status", "Title", "BPM", "Key", "Length", "Attempts", "Added", "Actions"],
-    emptyTable: "Upload your first track to start the guided workflow.",
-    retry: "Retry",
-    delete: "Delete",
-    ready: "Ready",
-    analyzingStatus: "Analyzing",
-    attention: "Needs attention",
-    queued: "Queued",
-    working: "Working...",
-  },
-} as const;
-
-type AppCopy = (typeof copy)[Language];
+const studioPills = ["ASP.NET Core BFF", "React + TypeScript", "Python audio engine", "Portfolio-ready demo"];
 
 function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -238,12 +34,12 @@ function formatDuration(seconds: number): string {
   return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }
 
-function formatDate(value: string | null, language: Language): string {
+function formatDate(value: string | null): string {
   if (!value) {
     return "--";
   }
 
-  return new Intl.DateTimeFormat(language === "sk" ? "sk-SK" : "en-GB", {
+  return new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
     month: "short",
     hour: "2-digit",
@@ -251,153 +47,88 @@ function formatDate(value: string | null, language: Language): string {
   }).format(new Date(value));
 }
 
-function parseWaveform(track: Track | null): number[] {
+const EMPTY_WAVEFORM: WaveformBands = {
+  low: [],
+  mid: [],
+  high: [],
+  energy: [],
+  transient: [],
+};
+
+function clamp01(value: number): number {
+  return Math.min(Math.max(value, 0), 1);
+}
+
+function clampWaveformBands(waveform: Partial<WaveformBands>): WaveformBands {
+  const lengths = [
+    waveform.low?.length ?? 0,
+    waveform.mid?.length ?? 0,
+    waveform.high?.length ?? 0,
+    waveform.energy?.length ?? 0,
+    waveform.transient?.length ?? 0,
+  ].filter((length) => length > 0);
+
+  if (lengths.length === 0) {
+    return EMPTY_WAVEFORM;
+  }
+
+  const size = Math.min(...lengths);
+  return {
+    low: (waveform.low ?? []).slice(0, size).map((value) => clamp01(Number(value) || 0)),
+    mid: (waveform.mid ?? []).slice(0, size).map((value) => clamp01(Number(value) || 0)),
+    high: (waveform.high ?? []).slice(0, size).map((value) => clamp01(Number(value) || 0)),
+    energy: (waveform.energy ?? []).slice(0, size).map((value) => clamp01(Number(value) || 0)),
+    transient: (waveform.transient ?? []).slice(0, size).map((value) => clamp01(Number(value) || 0)),
+  };
+}
+
+function parseWaveform(track: Track | null): WaveformBands {
   if (!track?.waveformDataJson) {
-    return [];
+    return EMPTY_WAVEFORM;
   }
 
   try {
-    const parsed = JSON.parse(track.waveformDataJson) as number[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
+    const parsed = JSON.parse(track.waveformDataJson) as
+      | number[]
+      | { bands?: Partial<WaveformBands> }
+      | Partial<WaveformBands>;
 
-function buildAdvice(trackA: Track | null, trackB: Track | null, language: Language): string[] {
-  if (!trackA || !trackB) {
-    return [
-      language === "sk"
-        ? "Načítaj pripravený track do oboch deckov a porovnaj tempo, key a AI timing guidance."
-        : "Load a ready track into both decks to compare tempo, key and AI timing guidance.",
-    ];
-  }
+    if (Array.isArray(parsed)) {
+      const energy = parsed.map((value) => clamp01(Number(value) || 0));
+      const transient = energy.map((value, index) => {
+        const previous = energy[Math.max(0, index - 1)] ?? value;
+        const next = energy[Math.min(energy.length - 1, index + 1)] ?? value;
+        return clamp01(Math.abs(value - ((previous + next) * 0.5)) * 4.8);
+      });
 
-  const lines: string[] = [];
-
-  if (trackA.bpm && trackB.bpm) {
-    const delta = Math.abs(trackA.bpm - trackB.bpm);
-    if (delta <= 3) {
-      lines.push(
-        language === "sk"
-          ? `Tempo si sadá veľmi dobre: ${trackA.bpm.toFixed(1)} vs ${trackB.bpm.toFixed(1)} BPM.`
-          : `Tempo fit is strong at ${trackA.bpm.toFixed(1)} vs ${trackB.bpm.toFixed(1)} BPM.`,
-      );
-    } else if (delta <= 8) {
-      lines.push(
-        language === "sk"
-          ? `Rozdiel tempa je ${delta.toFixed(1)} BPM. Ľahký sync by mal stále fungovať čisto.`
-          : `Tempo gap is ${delta.toFixed(1)} BPM. Light sync should still sound clean.`,
-      );
-    } else {
-      lines.push(
-        language === "sk"
-          ? `Rozdiel tempa je ${delta.toFixed(1)} BPM. Track B bude potrebovať výraznejšiu korekciu.`
-          : `Tempo gap is ${delta.toFixed(1)} BPM. Track B will need stronger correction.`,
-      );
+      return {
+        low: energy.map((value, index) => clamp01(value * 0.82 + transient[index] * 0.08)),
+        mid: energy.map((value) => clamp01(Math.pow(value, 1.08) * 0.64)),
+        high: energy.map((value, index) => clamp01(Math.pow(value, 1.36) * 0.36 + transient[index] * 0.42)),
+        energy,
+        transient,
+      };
     }
-  }
 
-  if (trackA.camelotKey && trackB.camelotKey) {
-    lines.push(
-      trackA.camelotKey === trackB.camelotKey
-        ? language === "sk"
-          ? `Harmonický blend vyzerá čisto v key ${trackA.camelotKey}.`
-          : `Harmonic blend looks clean in ${trackA.camelotKey}.`
-        : language === "sk"
-          ? `Skontroluj, ako pôsobí pohyb z key ${trackA.camelotKey} do ${trackB.camelotKey}.`
-          : `Check how the move from ${trackA.camelotKey} to ${trackB.camelotKey} feels.`,
-    );
-  }
+    if (parsed && typeof parsed === "object" && "bands" in parsed && parsed.bands) {
+      return clampWaveformBands(parsed.bands);
+    }
 
-  lines.push(
-    language === "sk"
-      ? "Skús púšťať Track B na nový takt alebo novú frázu, aby prechod pôsobil prirodzene."
-      : "Try launching Track B on a fresh bar or phrase so the transition feels intentional.",
-  );
-  lines.push(
-    language === "sk"
-      ? "Vyrenderuj automatický mix a porovnaj ho s vlastným manuálnym prechodom."
-      : "Render the automatic mix and compare it with your own manual transition.",
-  );
+    if (parsed && typeof parsed === "object") {
+      return clampWaveformBands(parsed);
+    }
 
-  return lines;
-}
-
-function buildTips(trackA: Track | null, trackB: Track | null, language: Language): string[] {
-  if (!trackA || !trackB) {
-    return language === "sk"
-      ? [
-          "Začni pármi trackov s podobným BPM. Beatmatching bude výrazne jednoduchší.",
-          "Track B púšťaj pri phrase change, nie uprostred vokálu alebo dropu.",
-          "AI render používaj ako kouča: vypočuj si timing, napodobni ho a dolaď podľa sluchu.",
-        ]
-      : [
-          "Start with tracks that are close in BPM. Beatmatching will feel much more forgiving.",
-          "Bring Track B in on a phrase change, not in the middle of a vocal or drop.",
-          "Use the AI render as a coach: listen to the timing, copy it, then refine it by ear.",
-        ];
-  }
-
-  const tips: string[] = [];
-
-  if (trackA.bpm && trackB.bpm) {
-    const delta = Math.abs(trackA.bpm - trackB.bpm);
-    tips.push(
-      delta <= 5
-        ? language === "sk"
-          ? `BPM rozdiel je len ${delta.toFixed(1)}. Toto je dobrá dvojica na prvý tréning beatmatchu.`
-          : `The BPM gap is only ${delta.toFixed(1)}. This is a good beginner pairing for beatmatching.`
-        : language === "sk"
-          ? `BPM rozdiel je ${delta.toFixed(1)}. Tento pár si nechaj skôr na pokročilejší tréning.`
-          : `The BPM gap is ${delta.toFixed(1)}. Save this pair for slightly more advanced practice.`,
-    );
-  }
-
-  if (trackA.camelotKey && trackB.camelotKey) {
-    tips.push(
-      trackA.camelotKey === trackB.camelotKey
-        ? language === "sk"
-          ? `Oba tracky sú v key ${trackA.camelotKey}, takže sa môžeš sústrediť hlavne na phrasing a EQ.`
-          : `Both tracks sit in ${trackA.camelotKey}, so you can focus on phrasing and EQ.`
-        : language === "sk"
-          ? `Key sa mení z ${trackA.camelotKey} do ${trackB.camelotKey}. Počúvaj, či sa nebijú pady alebo vokály.`
-          : `The keys move from ${trackA.camelotKey} to ${trackB.camelotKey}. Listen for clashing pads or vocals.`,
-    );
-  }
-
-  tips.push(
-    language === "sk"
-      ? "Počítaj 16 alebo 32 dôb na konci Tracku A a spusti Track B na ďalší downbeat."
-      : "Count 16 or 32 beats near the end of Track A and trigger Track B on the next downbeat.",
-  );
-
-  return tips;
-}
-
-function triggerDownload(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
-function statusLabel(status: string, t: AppCopy): string {
-  switch (status.toLowerCase()) {
-    case "ready":
-      return t.ready;
-    case "analyzing":
-      return t.analyzingStatus;
-    case "error":
-      return t.attention;
-    default:
-      return t.queued;
+    return EMPTY_WAVEFORM;
+  } catch {
+    return EMPTY_WAVEFORM;
   }
 }
 
-function statusTone(status: string): string {
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function trackStatusTone(status: string): string {
   switch (status.toLowerCase()) {
     case "ready":
       return "success";
@@ -410,17 +141,96 @@ function statusTone(status: string): string {
   }
 }
 
+function trackStatusLabel(status: string): string {
+  switch (status.toLowerCase()) {
+    case "ready":
+      return "Ready";
+    case "analyzing":
+      return "Analyzing";
+    case "error":
+      return "Needs attention";
+    default:
+      return "Queued";
+  }
+}
+
+function buildPairAssessment(trackA: Track | null, trackB: Track | null): { tone: string; title: string; summary: string } {
+  if (!trackA || !trackB) {
+    return {
+      tone: "neutral",
+      title: "Select a pair",
+      summary: "Choose two ready tracks to unlock the render preview, cue planner, and studio guidance.",
+    };
+  }
+
+  const bpmDelta = trackA.bpm && trackB.bpm ? Math.abs(trackA.bpm - trackB.bpm) : null;
+  const harmonicMatch = trackA.camelotKey && trackB.camelotKey && trackA.camelotKey === trackB.camelotKey;
+
+  if (bpmDelta !== null && bpmDelta <= 3 && harmonicMatch) {
+    return {
+      tone: "success",
+      title: "Showcase-ready pairing",
+      summary: "Tempo and harmonic fit are both strong. This pair is a good candidate for a clean interview demo render.",
+    };
+  }
+
+  if (bpmDelta !== null && bpmDelta <= 6) {
+    return {
+      tone: "warning",
+      title: "Playable with light correction",
+      summary: "The blend should still work, but you will want to listen closely to phrasing and timing on the transition.",
+    };
+  }
+
+  return {
+    tone: "danger",
+    title: "Advanced pairing",
+    summary: "The BPM gap is wider, so keep this as a second-pass demo after you prepare an easier headline example.",
+  };
+}
+
+function buildPracticeNotes(trackA: Track | null, trackB: Track | null): string[] {
+  if (!trackA || !trackB) {
+    return [
+      "Lead with two tracks that sit close in BPM so your first demo feels controlled.",
+      "Use the analyzer first when you want quick confidence before pushing tracks into the library.",
+      "Render one strong export and keep it ready to play during the interview.",
+    ];
+  }
+
+  const notes: string[] = [];
+  const bpmDelta = trackA.bpm && trackB.bpm ? Math.abs(trackA.bpm - trackB.bpm) : null;
+
+  if (bpmDelta !== null) {
+    notes.push(
+      bpmDelta <= 4
+        ? `Tempo gap is only ${bpmDelta.toFixed(1)} BPM, so this pair is forgiving and interview-friendly.`
+        : `Tempo gap is ${bpmDelta.toFixed(1)} BPM, so set a clean entry point and avoid rushing the handover.`,
+    );
+  }
+
+  if (trackA.camelotKey && trackB.camelotKey) {
+    notes.push(
+      trackA.camelotKey === trackB.camelotKey
+        ? `Both tracks land in ${trackA.camelotKey}, which lets you focus on phrasing, energy, and fade shape.`
+        : `Keys move from ${trackA.camelotKey} to ${trackB.camelotKey}; listen for pad and vocal clashes before exporting.`,
+    );
+  }
+
+  notes.push("Aim to bring Track B in on a fresh phrase, not mid-vocal or mid-drop.");
+  notes.push("Keep one polished render as the hero output and use the cue planner as supporting proof of the AI workflow.");
+
+  return notes;
+}
+
+function downloadBlob(blobUrl: string, fileName: string) {
+  const anchor = document.createElement("a");
+  anchor.href = blobUrl;
+  anchor.download = fileName;
+  anchor.click();
+}
+
 export default function App() {
-  const [language, setLanguage] = useState<Language>(() => {
-    if (typeof window === "undefined") {
-      return "sk";
-    }
-
-    const saved = window.localStorage.getItem("mixerai-language");
-    return saved === "en" || saved === "sk" ? saved : "sk";
-  });
-  const t = copy[language];
-
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
@@ -432,11 +242,125 @@ export default function App() {
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [libraryQuery, setLibraryQuery] = useState("");
 
   const [selectedDeckAId, setSelectedDeckAId] = useState("");
+  const [dragOverA, setDragOverA] = useState(false);
+  const [dragOverB, setDragOverB] = useState(false);
   const [selectedDeckBId, setSelectedDeckBId] = useState("");
   const [crossfader, setCrossfader] = useState(50);
+  const [isPlayingA, setIsPlayingA] = useState(false);
+  const [eqA, setEqA] = useState({ high: 0, mid: 0, low: 0, gain: 1 });
+  const [eqB, setEqB] = useState({ high: 0, mid: 0, low: 0, gain: 1 });
+  const audioNodesA = useRef<any>(null);
+  const audioNodesB = useRef<any>(null);
+
+  const initAudioContextNode = (audioElem: HTMLAudioElement, refStorage: any) => {
+    if (!audioElem || refStorage.current) return;
+    
+    // We only create this ONCE per audio element
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const source = ctx.createMediaElementSource(audioElem);
+    
+    const highFilter = ctx.createBiquadFilter();
+    highFilter.type = "highshelf";
+    highFilter.frequency.value = 3200;
+
+    const midFilter = ctx.createBiquadFilter();
+    midFilter.type = "peaking";
+    midFilter.frequency.value = 1000;
+    midFilter.Q.value = 0.5;
+
+    const lowFilter = ctx.createBiquadFilter();
+    lowFilter.type = "lowshelf";
+    lowFilter.frequency.value = 320;
+
+    const gainNode = ctx.createGain();
+
+    source.connect(highFilter);
+    highFilter.connect(midFilter);
+    midFilter.connect(lowFilter);
+    lowFilter.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    refStorage.current = { ctx, highFilter, midFilter, lowFilter, gainNode };
+  };
+
+  useEffect(() => {
+    if (audioNodesA.current) {
+        audioNodesA.current.highFilter.gain.value = eqA.high;
+        audioNodesA.current.midFilter.gain.value = eqA.mid;
+        audioNodesA.current.lowFilter.gain.value = eqA.low;
+        audioNodesA.current.gainNode.gain.value = eqA.gain;
+    }
+  }, [eqA]);
+
+  useEffect(() => {
+    if (audioNodesB.current) {
+        audioNodesB.current.highFilter.gain.value = eqB.high;
+        audioNodesB.current.midFilter.gain.value = eqB.mid;
+        audioNodesB.current.lowFilter.gain.value = eqB.low;
+        audioNodesB.current.gainNode.gain.value = eqB.gain;
+    }
+  }, [eqB]);
+
+  const [isPlayingB, setIsPlayingB] = useState(false);
+
+  const startScrubbing = (e, audioRef, durationSeconds) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const target = e.currentTarget;
+    const pointerId = e.pointerId;
+    target.setPointerCapture?.(pointerId);
+
+    const startX = e.clientX;
+    const startTime = audio.currentTime;
+    const ZOOM_PX_PER_SEC = 112;
+    const resolvedDuration = Number.isFinite(audio.duration) && audio.duration > 0
+      ? audio.duration
+      : (durationSeconds ?? 0);
+
+    const clampTime = (value) => {
+      if (resolvedDuration > 0) {
+        return Math.max(0, Math.min(value, resolvedDuration));
+      }
+
+      return Math.max(0, value);
+    };
+
+    const updateScrubPosition = (clientX) => {
+      const deltaX = clientX - startX;
+      audio.currentTime = clampTime(startTime - (deltaX / ZOOM_PX_PER_SEC));
+    };
+
+    updateScrubPosition(e.clientX);
+
+    const onPointerMove = (ev) => {
+      updateScrubPosition(ev.clientX);
+    };
+
+    const onPointerUp = () => {
+      target.releasePointerCapture?.(pointerId);
+      target.removeEventListener("pointermove", onPointerMove);
+      target.removeEventListener("pointerup", onPointerUp);
+      target.removeEventListener("pointercancel", onPointerUp);
+    };
+
+    target.addEventListener("pointermove", onPointerMove);
+    target.addEventListener("pointerup", onPointerUp);
+    target.addEventListener("pointercancel", onPointerUp);
+  };
+
+  const [useManualRenderPlan, setUseManualRenderPlan] = useState(false);
+  const [manualOverlayStartSeconds, setManualOverlayStartSeconds] = useState(24);
+  const [manualRightStartSeconds, setManualRightStartSeconds] = useState(32);
   const [renderPending, setRenderPending] = useState(false);
+  const [renderedMixUrl, setRenderedMixUrl] = useState<string | null>(null);
+  const [renderedMixName, setRenderedMixName] = useState("mixerai-transition-reference.mp3");
 
   const [recommendationForm, setRecommendationForm] = useState<TransitionRecommendationRequest>({
     leftSetId: "",
@@ -455,10 +379,6 @@ export default function App() {
 
   const deckAAudioRef = useRef<HTMLAudioElement | null>(null);
   const deckBAudioRef = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => {
-    window.localStorage.setItem("mixerai-language", language);
-  }, [language]);
 
   useEffect(() => {
     let active = true;
@@ -528,17 +448,79 @@ export default function App() {
     }
   }, [crossfader, selectedDeckAId, selectedDeckBId]);
 
-  async function refreshWorkspace() {
-    setWorkspaceLoading(true);
+  useEffect(() => {
+    if (!deckAAudioRef.current) {
+      return;
+    }
+
+    deckAAudioRef.current.load();
+    deckAAudioRef.current.currentTime = 0;
+    setIsPlayingA(false);
+  }, [selectedDeckAId]);
+
+  useEffect(() => {
+    if (!deckBAudioRef.current) {
+      return;
+    }
+
+    deckBAudioRef.current.load();
+    deckBAudioRef.current.currentTime = 0;
+    setIsPlayingB(false);
+  }, [selectedDeckBId]);
+
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
+  useEffect(() => {
+    return () => {
+      if (renderedMixUrl) {
+        URL.revokeObjectURL(renderedMixUrl);
+      }
+    };
+  }, [renderedMixUrl]);
+
+  useEffect(() => {
+    if (!session?.isAuthenticated) {
+      return;
+    }
+
+    const hasActiveTracks = workspace?.tracks.some((track) => {
+      const status = track.status.toLowerCase();
+      return status === "pending" || status === "analyzing";
+    });
+
+    if (!hasActiveTracks) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void refreshWorkspace(false);
+    }, 7000);
+
+    return () => window.clearInterval(interval);
+  }, [session?.isAuthenticated, workspace]);
+
+  async function refreshWorkspace(showSpinner = true) {
+    if (showSpinner) {
+      setWorkspaceLoading(true);
+    }
     setWorkspaceError(null);
 
     try {
       const snapshot = await api.getWorkspace();
       startTransition(() => setWorkspace(snapshot));
     } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : language === "sk" ? "Workspace sa nepodarilo načítať." : "Workspace could not be loaded.");
+      setWorkspaceError(error instanceof Error ? error.message : "Workspace could not be loaded.");
     } finally {
-      setWorkspaceLoading(false);
+      if (showSpinner) {
+        setWorkspaceLoading(false);
+      }
     }
   }
 
@@ -553,11 +535,9 @@ export default function App() {
         : await api.register(authForm.email, authForm.password);
 
       setSession(nextSession);
-      setNotice(authMode === "login"
-        ? language === "sk" ? "Prihlásenie úspešné. Štúdio je pripravené." : "Signed in. Your studio is ready."
-        : language === "sk" ? "Účet bol vytvorený. Štúdio je pripravené na demo." : "Account created. The studio is ready for your demo.");
+      setNotice(authMode === "login" ? "Studio session unlocked." : "Account created. The studio is ready.");
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : language === "sk" ? "Autentifikácia zlyhala." : "Authentication failed.");
+      setAuthError(error instanceof Error ? error.message : "Authentication failed.");
     } finally {
       setAuthPending(false);
     }
@@ -567,7 +547,9 @@ export default function App() {
     await api.logout();
     setSession({ isAuthenticated: false, displayName: null, email: null });
     setWorkspace(null);
-    setNotice(language === "sk" ? "Odhlásil si sa zo štúdia." : "Signed out of the studio.");
+    setRecommendationResults([]);
+    setAnalysisResult(null);
+    setNotice("Signed out.");
   }
 
   async function handleUploadTrack(event: ChangeEvent<HTMLInputElement>) {
@@ -578,61 +560,87 @@ export default function App() {
 
     try {
       await api.uploadTrack(file);
-      setNotice(language === "sk"
-        ? `Track ${file.name} bol nahratý. Analýza sa zaradila do fronty.`
-        : `Uploaded ${file.name}. Analysis will process it next.`);
+      setNotice(`Uploaded ${file.name}. Analysis has been queued.`);
       await refreshWorkspace();
     } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : language === "sk" ? "Upload zlyhal." : "Upload failed.");
+      setWorkspaceError(error instanceof Error ? error.message : "Upload failed.");
     } finally {
       event.target.value = "";
     }
   }
 
   async function handleDeleteTrack(track: Track) {
-    const message = language === "sk"
-      ? `Vymazať "${track.title}" z knižnice?`
-      : `Delete "${track.title}" from the library?`;
-
-    if (!window.confirm(message)) {
+    if (!window.confirm(`Delete "${track.title}" from the library?`)) {
       return;
     }
 
     try {
       await api.deleteTrack(track.id);
-      setNotice(language === "sk" ? `Track ${track.title} bol odstránený.` : `Deleted ${track.title}.`);
-      await refreshWorkspace();
+      setNotice(`Deleted ${track.title}.`);
+      await refreshWorkspace(false);
     } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : language === "sk" ? "Mazanie zlyhalo." : "Delete failed.");
+      setWorkspaceError(error instanceof Error ? error.message : "Delete failed.");
     }
   }
 
   async function handleRetryTrack(track: Track) {
     try {
       await api.retryTrackAnalysis(track.id);
-      setNotice(language === "sk"
-        ? `Analýza tracku ${track.title} bola znovu zaradená do fronty.`
-        : `Analysis re-queued for ${track.title}.`);
-      await refreshWorkspace();
+      setNotice(`Re-queued analysis for ${track.title}.`);
+      await refreshWorkspace(false);
     } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : language === "sk" ? "Opätovné spustenie zlyhalo." : "Retry failed.");
+      setWorkspaceError(error instanceof Error ? error.message : "Retry failed.");
+    }
+  }
+
+  async function handleRetryLibraryTracks() {
+    const retryableTracks = libraryTracks.filter((track) => track.status.toLowerCase() !== "analyzing");
+    if (retryableTracks.length === 0) {
+      setNotice("No tracks are available for re-analysis right now.");
+      return;
+    }
+
+    try {
+      await Promise.all(retryableTracks.map((track) => api.retryTrackAnalysis(track.id)));
+      setNotice(`Queued re-analysis for ${retryableTracks.length} track(s).`);
+      await refreshWorkspace(false);
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : "Bulk re-analysis failed.");
     }
   }
 
   async function handleRenderMix() {
     if (!selectedDeckAId || !selectedDeckBId) {
-      setWorkspaceError(language === "sk" ? "Pred renderom vyber track pre oba decky." : "Select a track for both decks before rendering.");
+      setWorkspaceError("Select a ready track on both decks before rendering.");
       return;
     }
 
     setRenderPending(true);
     setWorkspaceError(null);
+
     try {
-      const blob = await api.renderMix(selectedDeckAId, selectedDeckBId);
-      triggerDownload(blob, "mixerai-auto-mix-reference.mp3");
-      setNotice(language === "sk" ? "Automatický mix bol vygenerovaný a stiahnutý." : "Automatic mix generated and downloaded.");
+      const request: RenderMixRequest = {
+        trackAId: selectedDeckAId,
+        trackBId: selectedDeckBId,
+        overlayStartSeconds: useManualRenderPlan ? manualOverlayStartSeconds : null,
+        rightStartSeconds: useManualRenderPlan ? manualRightStartSeconds : null,
+      };
+
+      const blob = await api.renderMix(request);
+      if (renderedMixUrl) {
+        URL.revokeObjectURL(renderedMixUrl);
+      }
+
+      const blobUrl = URL.createObjectURL(blob);
+      setRenderedMixUrl(blobUrl);
+      setRenderedMixName(
+        `${selectedTrackA?.title ?? "deck-a"}-to-${selectedTrackB?.title ?? "deck-b"}-showcase-mix.mp3`
+          .toLowerCase()
+          .replace(/[^a-z0-9.-]+/g, "-"),
+      );
+      setNotice("Mix preview rendered. You can audition it in-app and export the MP3.");
     } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : language === "sk" ? "Render mixu zlyhal." : "Mix render failed.");
+      setWorkspaceError(error instanceof Error ? error.message : "Mix render failed.");
     } finally {
       setRenderPending(false);
     }
@@ -646,7 +654,7 @@ export default function App() {
     try {
       setRecommendationResults(await api.recommendTransitions(recommendationForm));
     } catch (error) {
-      setRecommendationError(error instanceof Error ? error.message : language === "sk" ? "Odporúčania sa nepodarilo získať." : "Recommendations failed.");
+      setRecommendationError(error instanceof Error ? error.message : "Recommendations failed.");
     } finally {
       setRecommendationPending(false);
     }
@@ -655,55 +663,82 @@ export default function App() {
   async function handleAnalyzeMix(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!analysisTrackA || !analysisTrackB) {
-      setAnalysisError(language === "sk" ? "Pred AI analýzou je potrebné vybrať oba tracky." : "Choose both tracks before requesting AI analysis.");
+      setAnalysisError("Choose both source tracks before running the analyzer.");
       return;
     }
 
     setAnalysisPending(true);
     setAnalysisError(null);
+
     try {
       const result = await api.analyzeMix(analysisTrackA, analysisTrackB);
       setAnalysisResult(result);
-      setNotice(language === "sk"
-        ? "Analýza hotová. Získal si BPM, beat markery a odporúčaný overlay timing."
-        : "Analysis completed with BPM, beat markers and a suggested overlay window.");
+      setNotice("Transition analysis completed. You can now preview the cue timings and apply them to the render plan.");
     } catch (error) {
-      setAnalysisError(error instanceof Error ? error.message : language === "sk" ? "Analýza zlyhala." : "Analysis failed.");
+      setAnalysisError(error instanceof Error ? error.message : "Analysis failed.");
     } finally {
       setAnalysisPending(false);
     }
   }
 
+  function handleApplyAnalysisPlan() {
+    if (!analysisResult) {
+      return;
+    }
+
+    setUseManualRenderPlan(true);
+    setManualOverlayStartSeconds(analysisResult.recommendation.overlayStartSeconds);
+    setManualRightStartSeconds(analysisResult.recommendation.rightStartSeconds);
+    setNotice("Analyzer timings loaded into the manual render controls.");
+  }
+
   const readyTracks = workspace?.tracks.filter((track) => track.status.toLowerCase() === "ready") ?? [];
-  const selectedTrackA = workspace?.tracks.find((track) => track.id === selectedDeckAId) ?? null;
-  const selectedTrackB = workspace?.tracks.find((track) => track.id === selectedDeckBId) ?? null;
+  const libraryTracks = workspace?.tracks ?? [];
+  const filteredTracks = libraryTracks.filter((track) => {
+    const query = libraryQuery.trim().toLowerCase();
+    if (!query) {
+      return true;
+    }
+
+    return [
+      track.title,
+      track.artist ?? "",
+      track.camelotKey ?? "",
+      track.status,
+    ].some((value) => value.toLowerCase().includes(query));
+  });
+
+  const selectedTrackA = libraryTracks.find((track) => track.id === selectedDeckAId) ?? null;
+  const selectedTrackB = libraryTracks.find((track) => track.id === selectedDeckBId) ?? null;
   const deckAWaveform = parseWaveform(selectedTrackA);
   const deckBWaveform = parseWaveform(selectedTrackB);
-  const advice = buildAdvice(selectedTrackA, selectedTrackB, language);
-  const tips = buildTips(selectedTrackA, selectedTrackB, language);
-  const profileName = workspace?.displayName ?? session?.displayName ?? session?.email ?? t.studioTitle;
-  const languageSwitcher = (
-    <div className="language-switch" role="group" aria-label={t.language}>
-      {(["sk", "en"] as const).map((option) => (
-        <button
-          key={option}
-          type="button"
-          className={language === option ? "language-button active" : "language-button"}
-          onClick={() => setLanguage(option)}
-        >
-          {option.toUpperCase()}
-        </button>
-      ))}
-    </div>
-  );
+  const pairAssessment = buildPairAssessment(selectedTrackA, selectedTrackB);
+  const practiceNotes = buildPracticeNotes(selectedTrackA, selectedTrackB);
+
+  const overlayMax = Math.max(16, Math.min(Math.floor((selectedTrackA?.durationSeconds ?? 90) - 8), 96));
+  const rightStartMax = Math.max(16, Math.min(Math.floor((selectedTrackB?.durationSeconds ?? 90) - 12), 120));
+  const profileName = workspace?.displayName ?? session?.displayName ?? session?.email ?? "MixerAI";
+  const bpmDelta = selectedTrackA?.bpm && selectedTrackB?.bpm
+    ? Math.abs(selectedTrackA.bpm - selectedTrackB.bpm)
+    : null;
+
+  useEffect(() => {
+    setManualOverlayStartSeconds((current) => clamp(current, 0, overlayMax));
+    setManualRightStartSeconds((current) => clamp(current, 0, rightStartMax));
+  }, [overlayMax, rightStartMax]);
+
+  const activeTrackCount = libraryTracks.filter((track) => {
+    const status = track.status.toLowerCase();
+    return status === "pending" || status === "analyzing";
+  }).length;
 
   if (sessionLoading) {
     return (
       <div className="app-state-screen">
         <div className="state-card">
           <p className="eyebrow">MixerAI</p>
-          <h1>{t.loadingTitle}</h1>
-          <p>{t.loadingBody}</p>
+          <h1>Loading studio</h1>
+          <p>Checking your session and warming up the workspace.</p>
         </div>
       </div>
     );
@@ -712,62 +747,63 @@ export default function App() {
   if (!session?.isAuthenticated) {
     return (
       <div className="app-shell landing-shell">
-        <header className="topbar">
-          <div className="brand-block">
-            <p className="eyebrow">{t.landingEyebrow}</p>
-            <h1 className="brand-title">{t.studioTitle}</h1>
-            <p className="brand-subtitle">{t.landingBody}</p>
-          </div>
-          <div className="topbar-meta">
-            <div className="tag-row">
-              {techPills.map((pill) => (
-                <span key={pill} className="tag">{pill}</span>
-              ))}
-            </div>
-            {languageSwitcher}
-          </div>
-        </header>
-
         <main className="landing-grid">
-          <section className="hero-card hero-card-landing">
-            <p className="product-badge">{language === "sk" ? "Produkt + portfolio" : "Product + portfolio"}</p>
-            <h2>{t.landingTitle}</h2>
-            <p className="hero-copy">{t.landingBody}</p>
-            <div className="journey-grid">
-              {t.landingCards.map(([title, body]) => (
-                <article key={title} className="journey-card">
-                  <strong>{title}</strong>
-                  <span>{body}</span>
-                </article>
+          <section className="landing-copy">
+            <p className="eyebrow">AI transition studio</p>
+            <h1 className="brand-title">MixerAI</h1>
+            <p className="hero-copy">
+              A polished DJ workflow demo for interviews: prep your library, audition transitions, inspect cue timing, and export one clean showcase mix.
+            </p>
+            <div className="pill-row">
+              {studioPills.map((pill) => (
+                <span key={pill} className="pill">
+                  {pill}
+                </span>
               ))}
             </div>
-            <div className="feature-grid">
-              {t.landingFeatures.map(([title, body]) => (
-                <article key={title} className="feature-card">
-                  <strong>{title}</strong>
-                  <span>{body}</span>
-                </article>
-              ))}
+            <div className="landing-panel-grid">
+              <article className="surface mini-surface">
+                <strong>Professional look</strong>
+                <p>Dark studio styling, structured dashboards, and a product tone that reads better on a hiring panel.</p>
+              </article>
+              <article className="surface mini-surface">
+                <strong>Real workflow</strong>
+                <p>Track upload, analysis, deck pairing, cue planning, manual overrides, and MP3 export all sit in one flow.</p>
+              </article>
+              <article className="surface mini-surface">
+                <strong>Demo output</strong>
+                <p>Generate one render you can play instantly inside the app and export as your interview artifact.</p>
+              </article>
             </div>
           </section>
 
-          <section className="auth-card">
-            <div className="section-copy">
-              <p className="eyebrow">{t.authTitle}</p>
-              <h3>{t.studioTitle}</h3>
-              <p className="muted-copy">{t.authBody}</p>
+          <section className="auth-surface surface">
+            <div className="section-heading">
+              <p className="eyebrow">Access</p>
+              <h2>Open the studio</h2>
+              <p>Use a simple demo account flow to get straight into the product experience.</p>
             </div>
-            <div className="toggle-row">
-              <button type="button" className={authMode === "login" ? "segmented-button active" : "segmented-button"} onClick={() => setAuthMode("login")}>
-                {t.signIn}
+
+            <div className="segmented-row">
+              <button
+                type="button"
+                className={authMode === "login" ? "segmented-button active" : "segmented-button"}
+                onClick={() => setAuthMode("login")}
+              >
+                Sign in
               </button>
-              <button type="button" className={authMode === "register" ? "segmented-button active" : "segmented-button"} onClick={() => setAuthMode("register")}>
-                {t.createAccount}
+              <button
+                type="button"
+                className={authMode === "register" ? "segmented-button active" : "segmented-button"}
+                onClick={() => setAuthMode("register")}
+              >
+                Create account
               </button>
             </div>
+
             <form className="stack-form" onSubmit={handleAuthSubmit}>
               <label className="field">
-                <span>{t.email}</span>
+                <span>Email</span>
                 <input
                   value={authForm.email}
                   onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
@@ -777,18 +813,18 @@ export default function App() {
                 />
               </label>
               <label className="field">
-                <span>{t.password}</span>
+                <span>Password</span>
                 <input
                   value={authForm.password}
                   onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
                   type="password"
-                  placeholder={t.passwordPlaceholder}
+                  placeholder="At least 6 characters"
                   required
                 />
               </label>
               {authError ? <div className="inline-message danger">{authError}</div> : null}
               <button type="submit" className="primary-button" disabled={authPending}>
-                {authPending ? t.working : authMode === "login" ? t.openWorkspace : t.createDemoAccount}
+                {authPending ? "Working..." : authMode === "login" ? "Enter workspace" : "Create demo account"}
               </button>
             </form>
           </section>
@@ -799,317 +835,277 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
+      <header className="studio-topbar">
         <div className="brand-block">
-          <p className="eyebrow">{t.topbarEyebrow}</p>
-          <h1 className="brand-title">{t.studioTitle}</h1>
-          <p className="brand-subtitle">{t.heroBody}</p>
+          <span className="topbar-brand">MIXER AI</span>
+          <span className="small-text">{profileName}</span>
         </div>
-        <div className="topbar-actions">
-          <div className="signed-in-panel">
-            <span className="signed-in-label">{t.signedInAs}</span>
-            <strong>{session.displayName ?? session.email}</strong>
-          </div>
-          {languageSwitcher}
-          <button type="button" className="secondary-button" onClick={() => void refreshWorkspace()} disabled={workspaceLoading}>
-            {workspaceLoading ? t.refreshing : t.refresh}
+        <div className="topbar-actions flex-row">
+          <button type="button" className="action-btn" onClick={() => refreshWorkspace()} disabled={workspaceLoading}>
+            {workspaceLoading ? "REFRESHING" : "REFRESH"}
           </button>
-          <button type="button" className="ghost-button" onClick={() => void handleLogout()}>
-            {t.signOut}
+          <button type="button" className="action-btn warn" onClick={() => handleLogout()}>
+            LOGOUT
           </button>
         </div>
       </header>
 
       <main className="dashboard-shell">
-        <section className="hero-banner">
-          <div className="hero-banner-copy">
-            <p className="eyebrow">{t.landingEyebrow}</p>
-            <h2>{t.heroTitle(profileName)}</h2>
-            <p className="hero-copy">{t.heroBody}</p>
-            <div className="journey-grid">
-              {t.heroCards.map(([title, body]) => (
-                <article key={title} className="journey-card">
-                  <strong>{title}</strong>
-                  <span>{body}</span>
-                </article>
-              ))}
-            </div>
+        <section className="global-waveforms">
+          <div className={`global-waveform-row ${dragOverA ? 'drag-over' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); setDragOverA(true); }}
+            onDragLeave={() => setDragOverA(false)}
+            onDrop={(e) => {
+               e.preventDefault();
+               setDragOverA(false);
+               const trackId = e.dataTransfer.getData('text/plain');
+               if (trackId) setSelectedDeckAId(trackId);
+            }}
+          >
+            <WaveformCanvas 
+              className="waveform-canvas" 
+              samples={deckAWaveform} 
+              accent="#08B2E3" 
+              background="transparent" 
+              audioRef={deckAAudioRef}
+              durationSeconds={selectedTrackA?.durationSeconds}
+              onPointerDown={(e) => startScrubbing(e, deckAAudioRef, selectedTrackA?.durationSeconds)}
+            />
           </div>
-          <div className="hero-side">
-            <div className="metric-grid">
-              <article className="metric-card"><span>{t.readyTracks}</span><strong>{workspace?.readyTrackCount ?? 0}</strong></article>
-              <article className="metric-card"><span>{t.needsAttention}</span><strong>{workspace?.failedTrackCount ?? 0}</strong></article>
-              <article className="metric-card"><span>{t.referenceSets}</span><strong>{workspace?.availableSetIds.length ?? 0}</strong></article>
-            </div>
-            <article className="spotlight-card">
-              <p className="eyebrow">{t.stackTitle}</p>
-              <p className="muted-copy">{t.stackBody}</p>
-              <div className="tag-row">
-                {techPills.map((pill) => (
-                  <span key={pill} className="tag">{pill}</span>
-                ))}
-              </div>
-            </article>
+          <div className={`global-waveform-row ${dragOverB ? 'drag-over' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); setDragOverB(true); }}
+            onDragLeave={() => setDragOverB(false)}
+            onDrop={(e) => {
+               e.preventDefault();
+               setDragOverB(false);
+               const trackId = e.dataTransfer.getData('text/plain');
+               if (trackId) setSelectedDeckBId(trackId);
+            }}
+          >
+            <WaveformCanvas 
+              className="waveform-canvas" 
+              samples={deckBWaveform} 
+              accent="#08B2E3" 
+              background="transparent" 
+              audioRef={deckBAudioRef}
+              durationSeconds={selectedTrackB?.durationSeconds}
+              onPointerDown={(e) => startScrubbing(e, deckBAudioRef, selectedTrackB?.durationSeconds)}
+            />
           </div>
         </section>
 
-        {notice ? <div className="inline-message success">{notice}</div> : null}
-        {workspaceError ? <div className="inline-message danger">{workspaceError}</div> : null}
-
-        <section className="dashboard-grid dashboard-grid-main">
-          <article className="panel panel-large">
-            <div className="panel-header">
-              <div className="section-copy">
-                <p className="eyebrow">{t.mixCoach}</p>
-                <h3>{t.mixCoachTitle}</h3>
-                <p className="muted-copy">{t.mixCoachBody}</p>
-              </div>
+        <section className="decks-area">
+          <article className="deck deck-a">
+            <div className="deck-header">
+              <span className="deck-id">1</span>
+              <select value={selectedDeckAId} onChange={(e) => setSelectedDeckAId(e.target.value)}>
+                <option value="">EMPTY</option>
+                {readyTracks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
+              </select>
             </div>
-            {readyTracks.length < 2 ? <div className="inline-message info">{t.mixCoachEmpty}</div> : null}
-            <div className="deck-grid">
-              <div className="deck-card deck-a">
-                <div className="deck-header">
-                  <span className="deck-label">{t.deckA}</span>
-                  <select value={selectedDeckAId} onChange={(event) => setSelectedDeckAId(event.target.value)}>
-                    <option value="">{t.chooseTrack}</option>
-                    {readyTracks.map((track) => (
-                      <option key={track.id} value={track.id}>{track.title}</option>
-                    ))}
-                  </select>
+            <div className="deck-body">
+              <div className="deck-info">
+                <h2 className="deck-title">{selectedTrackA?.title || "NO TRACK"}</h2>
+                <span className="deck-artist">{selectedTrackA?.artist || "Artist Info"}</span>
+                <div className="cdj-ctrl-row">
+                  
+                  <div className="deck-controls-wrapper">
+                  <div style={{ display: 'flex', gap: '15px' }}>
+                    
+                    <button className="cdj-btn cue" onClick={() => { if(deckAAudioRef.current) { deckAAudioRef.current.pause(); deckAAudioRef.current.currentTime = 0; }}}>CUE</button>
+                    <button className="cdj-btn play" onClick={() => { 
+                      if(deckAAudioRef.current) { 
+                        initAudioContextNode(deckAAudioRef.current, audioNodesA);
+                        deckAAudioRef.current.paused ? deckAAudioRef.current.play() : deckAAudioRef.current.pause(); 
+                        if (audioNodesA.current?.ctx.state === 'suspended') audioNodesA.current.ctx.resume();
+                      }
+                    }}>
+                      {isPlayingA ? "⏸" : "▶"}
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', marginLeft: '20px' }}>
+                     <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqA.high} onChange={(v) => setEqA({...eqA, high: v})} />
+                     <Knob label="MID" min={-26} max={6} centerValue={0} value={eqA.mid} onChange={(v) => setEqA({...eqA, mid: v})} />
+                     <Knob label="LOW" min={-26} max={6} centerValue={0} value={eqA.low} onChange={(v) => setEqA({...eqA, low: v})} />
+                     <Knob label="GAIN" min={0} max={2} centerValue={1} value={eqA.gain} onChange={(v) => setEqA({...eqA, gain: v})} />
+                  </div>
                 </div>
-                <strong>{selectedTrackA?.title ?? t.noTrack}</strong>
-                <p className="deck-subcopy">{selectedTrackA?.artist ?? t.noArtist}</p>
-                <div className="deck-meta">
-                  <span>{selectedTrackA?.bpm ? `${selectedTrackA.bpm.toFixed(1)} BPM` : "-- BPM"}</span>
-                  <span>{selectedTrackA?.camelotKey ?? "--"}</span>
-                  <span>{formatDuration(selectedTrackA?.durationSeconds ?? 0)}</span>
                 </div>
-                <WaveformCanvas className="waveform" samples={deckAWaveform} accent="#ff9b54" />
-                <audio ref={deckAAudioRef} controls src={selectedTrackA ? `/api/bff/library/audio/${selectedTrackA.id}` : undefined} />
+                <audio ref={deckAAudioRef} src={selectedTrackA ? `/api/bff/library/audio/${selectedTrackA.id}` : undefined} preload="auto" style={{display: 'none'}} onPlay={() => setIsPlayingA(true)} onPause={() => setIsPlayingA(false)} />
               </div>
-
-              <div className="deck-card deck-b">
-                <div className="deck-header">
-                  <span className="deck-label">{t.deckB}</span>
-                  <select value={selectedDeckBId} onChange={(event) => setSelectedDeckBId(event.target.value)}>
-                    <option value="">{t.chooseTrack}</option>
-                    {readyTracks.map((track) => (
-                      <option key={track.id} value={track.id}>{track.title}</option>
-                    ))}
-                  </select>
+              <div className="deck-stats">
+                <div className="deck-stat-box bpm">
+                  <span>BPM</span>
+                  <strong>{selectedTrackA?.bpm ? selectedTrackA.bpm.toFixed(2) : "--"}</strong>
                 </div>
-                <strong>{selectedTrackB?.title ?? t.noTrack}</strong>
-                <p className="deck-subcopy">{selectedTrackB?.artist ?? t.noArtist}</p>
-                <div className="deck-meta">
-                  <span>{selectedTrackB?.bpm ? `${selectedTrackB.bpm.toFixed(1)} BPM` : "-- BPM"}</span>
-                  <span>{selectedTrackB?.camelotKey ?? "--"}</span>
-                  <span>{formatDuration(selectedTrackB?.durationSeconds ?? 0)}</span>
+                <div className="deck-stat-box">
+                  <span>KEY</span>
+                  <strong>{selectedTrackA?.camelotKey || "--"}</strong>
                 </div>
-                <WaveformCanvas className="waveform" samples={deckBWaveform} accent="#59b8ff" />
-                <audio ref={deckBAudioRef} controls src={selectedTrackB ? `/api/bff/library/audio/${selectedTrackB.id}` : undefined} />
               </div>
-            </div>
-
-            <div className="crossfader-panel">
-              <div className="crossfader-copy">
-                <strong>{t.crossfaderTitle}</strong>
-                <span>{t.crossfaderBody}</span>
-              </div>
-              <input type="range" min="0" max="100" value={crossfader} onChange={(event) => setCrossfader(Number(event.target.value))} />
-            </div>
-
-            <div className="coach-bar">
-              <div className="section-copy">
-                <p className="eyebrow">{t.adviceTitle}</p>
-                <p className="muted-copy">{t.renderHint}</p>
-              </div>
-              <button type="button" className="primary-button" onClick={() => void handleRenderMix()} disabled={renderPending}>
-                {renderPending ? t.renderingMix : t.renderMix}
-              </button>
-            </div>
-
-            <div className="advice-list">
-              {advice.map((item) => (
-                <p key={item}>{item}</p>
-              ))}
             </div>
           </article>
 
-          <div className="stack-column">
-            <article className="panel">
-              <div className="panel-header">
-                <div className="section-copy">
-                  <p className="eyebrow">{t.planner}</p>
-                  <h3>{t.plannerTitle}</h3>
-                  <p className="muted-copy">{t.plannerBody}</p>
-                </div>
-              </div>
-              <form className="stack-form" onSubmit={handleRecommendationSubmit}>
-                <label className="field">
-                  <span>{t.leftSet}</span>
-                  <select value={recommendationForm.leftSetId} onChange={(event) => setRecommendationForm((current) => ({ ...current, leftSetId: event.target.value }))}>
-                    <option value="">{t.chooseSet}</option>
-                    {workspace?.availableSetIds.map((setId) => (
-                      <option key={setId} value={setId}>{setId}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>{t.rightSet}</span>
-                  <select value={recommendationForm.rightSetId} onChange={(event) => setRecommendationForm((current) => ({ ...current, rightSetId: event.target.value }))}>
-                    <option value="">{t.chooseSet}</option>
-                    {workspace?.availableSetIds.map((setId) => (
-                      <option key={setId} value={setId}>{setId}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span>{t.topCandidates}</span>
-                  <input type="number" min="1" max="20" value={recommendationForm.topK} onChange={(event) => setRecommendationForm((current) => ({ ...current, topK: Number(event.target.value) }))} />
-                </label>
-                {recommendationError ? <div className="inline-message danger">{recommendationError}</div> : null}
-                <button type="submit" className="secondary-button" disabled={recommendationPending}>
-                  {recommendationPending ? t.findingCues : t.findCues}
-                </button>
-              </form>
-              <div className="result-list">
-                {recommendationResults.length === 0 ? (
-                  <p className="muted-copy">{t.noRecommendations}</p>
-                ) : (
-                  recommendationResults.map((result) => (
-                    <article key={`${result.leftSetId}-${result.rightSetId}-${result.leftSegmentIndex}-${result.rightSegmentIndex}`} className="result-card">
-                      <div><strong>{result.leftSetId}</strong><span>{result.leftStartSeconds.toFixed(1)}s</span></div>
-                      <span className="arrow">→</span>
-                      <div><strong>{result.rightSetId}</strong><span>{result.rightStartSeconds.toFixed(1)}s</span></div>
-                      <div className="score"><span>{t.fit}</span><strong>{(result.probability * 100).toFixed(1)}%</strong></div>
-                    </article>
-                  ))
-                )}
-              </div>
-            </article>
-            <article className="panel">
-              <div className="panel-header">
-                <div className="section-copy">
-                  <p className="eyebrow">{t.basics}</p>
-                  <h3>{t.basicsTitle}</h3>
-                  <p className="muted-copy">{t.basicsBody}</p>
-                </div>
-              </div>
-              <div className="learning-list">
-                {tips.map((tip) => (
-                  <article key={tip} className="tip-card"><p>{tip}</p></article>
-                ))}
-              </div>
-            </article>
-          </div>
-        </section>
-
-        <section className="dashboard-grid dashboard-grid-secondary">
-          <article className="panel">
-            <div className="panel-header">
-              <div className="section-copy">
-                <p className="eyebrow">{t.analyzer}</p>
-                <h3>{t.analyzerTitle}</h3>
-                <p className="muted-copy">{t.analyzerBody}</p>
+          <article className="mixer">
+            <div className="mixer-section">
+              <span className="mixer-title">CROSSFADER MIN / MAX</span>
+              <div className="crossfader-container">
+                <input type="range" min="0" max="100" value={crossfader} onChange={(e) => setCrossfader(Number(e.target.value))} />
               </div>
             </div>
-            <form className="stack-form" onSubmit={handleAnalyzeMix}>
-              <label className="field">
-                <span>{t.deckA}</span>
-                <input type="file" accept=".mp3,.wav,.flac,.m4a,.ogg,.mp4" onChange={(event) => setAnalysisTrackA(event.target.files?.[0] ?? null)} />
-              </label>
-              <label className="field">
-                <span>{t.deckB}</span>
-                <input type="file" accept=".mp3,.wav,.flac,.m4a,.ogg,.mp4" onChange={(event) => setAnalysisTrackB(event.target.files?.[0] ?? null)} />
-              </label>
-              {analysisError ? <div className="inline-message danger">{analysisError}</div> : null}
-              <button type="submit" className="secondary-button" disabled={analysisPending}>
-                {analysisPending ? t.analyzing : t.analyze}
+            <div className="mixer-section">
+              <span className="mixer-title">RENDER AI MIX</span>
+              <button 
+                type="button" 
+                className="primary-button" 
+                onClick={() => handleRenderMix()} 
+                disabled={renderPending || !selectedDeckAId || !selectedDeckBId}
+                style={{ width: '100%', marginBottom: '0.5rem' }}
+              >
+                {renderPending ? "RENDERING..." : "RENDER"}
               </button>
-            </form>
+              {renderedMixUrl && (
+                <div className="flex-row" style={{ width: '100%' }}>
+                  <audio controls src={renderedMixUrl} style={{ width: '100%', height: '30px' }} />
+                  <button className="action-btn" onClick={() => downloadBlob(renderedMixUrl, renderedMixName)}>EXPORT</button>
+                </div>
+              )}
+            </div>
+          </article>
 
-            {analysisResult ? (
-              <div className="analysis-grid">
-                <div className="metric-grid">
-                  <article className="metric-card"><span>{t.trackABpm}</span><strong>{analysisResult.recommendation.leftBpm.toFixed(2)}</strong></article>
-                  <article className="metric-card"><span>{t.trackBBpm}</span><strong>{analysisResult.recommendation.rightBpm.toFixed(2)}</strong></article>
-                  <article className="metric-card"><span>{t.overlayStart}</span><strong>{analysisResult.recommendation.overlayStartSeconds.toFixed(2)}s</strong></article>
-                  <article className="metric-card"><span>{t.modelConfidence}</span><strong>{(analysisResult.recommendation.probability * 100).toFixed(1)}%</strong></article>
-                </div>
-                <div className="analysis-track">
-                  <div className="analysis-track-header">
-                    <strong>{analysisResult.trackA.label || t.deckA}</strong>
-                    <span>{t.previewLength(`${analysisResult.trackA.previewDurationSeconds.toFixed(2)}s`)}</span>
+          <article className="deck deck-b">
+            <div className="deck-header">
+              <span className="deck-id" style={{ color: 'var(--blue)' }}>2</span>
+              <select value={selectedDeckBId} onChange={(e) => setSelectedDeckBId(e.target.value)}>
+                <option value="">EMPTY</option>
+                {readyTracks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
+              </select>
+            </div>
+            <div className="deck-body">
+              <div className="deck-info">
+                <h2 className="deck-title">{selectedTrackB?.title || "NO TRACK"}</h2>
+                <span className="deck-artist">{selectedTrackB?.artist || "Artist Info"}</span>
+                <div className="cdj-ctrl-row">
+                  
+                  <div className="deck-controls-wrapper">
+                  <div style={{ display: 'flex', gap: '15px' }}>
+                    
+                    <button className="cdj-btn cue" onClick={() => { if(deckBAudioRef.current) { deckBAudioRef.current.pause(); deckBAudioRef.current.currentTime = 0; }}}>CUE</button>
+                    <button className="cdj-btn play" onClick={() => { 
+                      if(deckBAudioRef.current) { 
+                        initAudioContextNode(deckBAudioRef.current, audioNodesB);
+                        deckBAudioRef.current.paused ? deckBAudioRef.current.play() : deckBAudioRef.current.pause(); 
+                        if (audioNodesB.current?.ctx.state === 'suspended') audioNodesB.current.ctx.resume();
+                      }
+                    }}>
+                      {isPlayingB ? "⏸" : "▶"}
+                    </button>
                   </div>
-                  <WaveformCanvas className="waveform waveform-tall" samples={analysisResult.trackA.waveform} accent="#ffd36b" beatMarkers={analysisResult.trackA.beatMarkers} durationSeconds={analysisResult.trackA.previewDurationSeconds} />
-                </div>
-                <div className="analysis-track">
-                  <div className="analysis-track-header">
-                    <strong>{analysisResult.trackB.label || t.deckB}</strong>
-                    <span>{t.suggestedSource(`${analysisResult.recommendation.rightStartSeconds.toFixed(2)}s`)}</span>
+                  <div style={{ display: 'flex', gap: '8px', marginLeft: '20px' }}>
+                     <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqB.high} onChange={(v) => setEqB({...eqB, high: v})} />
+                     <Knob label="MID" min={-26} max={6} centerValue={0} value={eqB.mid} onChange={(v) => setEqB({...eqB, mid: v})} />
+                     <Knob label="LOW" min={-26} max={6} centerValue={0} value={eqB.low} onChange={(v) => setEqB({...eqB, low: v})} />
+                     <Knob label="GAIN" min={0} max={2} centerValue={1} value={eqB.gain} onChange={(v) => setEqB({...eqB, gain: v})} />
                   </div>
-                  <WaveformCanvas className="waveform waveform-tall" samples={analysisResult.trackB.waveform} accent="#6bc5ff" beatMarkers={analysisResult.trackB.beatMarkers} durationSeconds={analysisResult.trackB.previewDurationSeconds} />
+                </div>
+                </div>
+                <audio ref={deckBAudioRef} src={selectedTrackB ? `/api/bff/library/audio/${selectedTrackB.id}` : undefined} preload="auto" style={{display: 'none'}} onPlay={() => setIsPlayingB(true)} onPause={() => setIsPlayingB(false)} />
+              </div>
+              <div className="deck-stats">
+                <div className="deck-stat-box bpm">
+                  <span>BPM</span>
+                  <strong>{selectedTrackB?.bpm ? selectedTrackB.bpm.toFixed(2) : "--"}</strong>
+                </div>
+                <div className="deck-stat-box">
+                  <span>KEY</span>
+                  <strong>{selectedTrackB?.camelotKey || "--"}</strong>
                 </div>
               </div>
-            ) : (
-              <p className="muted-copy">{t.analyzerEmpty}</p>
-            )}
+            </div>
           </article>
         </section>
 
-        <section className="dashboard-grid">
-          <article className="panel">
-            <div className="panel-header">
-              <div className="section-copy">
-                <p className="eyebrow">{t.library}</p>
-                <h3>{t.libraryTitle}</h3>
-                <p className="muted-copy">{t.libraryBody}</p>
-              </div>
-              <label className="upload-button">
-                {t.uploadAudio}
-                <input type="file" accept=".mp3,.wav,.flac,.m4a,.ogg,.mp4" onChange={handleUploadTrack} />
-              </label>
+        <section className="browser-area">
+          <aside className="browser-tree">
+            <div className="tree-header">COLLECTION</div>
+            <div className="tree-content">
+              <div className="tree-item">Audio Library ({workspace?.readyTrackCount || 0})</div>
+              <div className="tree-item">Analyzer Queue ({activeTrackCount})</div>
+              <div className="tree-item" style={{ marginTop: '1rem', color: 'var(--gold)' }}>AI Reference Sets</div>
+              {workspace?.availableSetIds.map(setId => (
+                <div className="tree-item" key={setId} style={{ paddingLeft: '1rem' }}>- {setId}</div>
+              ))}
             </div>
-            <div className="table-shell">
-              <table className="track-table">
+            <div className="tree-header" style={{ borderTop: '1px solid var(--panel-border)' }}>UPLOAD</div>
+            <div className="tree-content" style={{ flex: 'none', padding: '1rem', background: 'var(--panel-strong)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+               <label className="upload-button" style={{ width: '100%', textAlign: 'center', justifyContent: 'center' }}>
+                 CHOOSE FILE
+                 <input type="file" accept=".mp3,.wav,.flac,.m4a" onChange={handleUploadTrack} />
+               </label>
+               <button type="button" className="action-btn" style={{ width: '100%' }} onClick={() => handleRetryLibraryTracks()}>
+                 REANALYZE LIBRARY
+               </button>
+            </div>
+          </aside>
+
+          <section className="browser-list">
+            <div className="list-toolbar">
+              <input type="search" placeholder="Search Tracks..." value={libraryQuery} onChange={(e) => setLibraryQuery(e.target.value)} />
+              <div>
+                {notice && <span className="small-text" style={{ color: 'var(--success)', marginRight: '1rem' }}>{notice}</span>}
+                {workspaceError && <span className="small-text" style={{ color: 'var(--danger)', marginRight: '1rem' }}>{workspaceError}</span>}
+              </div>
+            </div>
+            <div className="table-wrapper">
+              <table className="rb-table">
                 <thead>
-                  <tr>{t.table.map((label) => <th key={label}>{label}</th>)}</tr>
+                  <tr>
+                    <th style={{ width: '30px' }}>#</th>
+                    <th>TRACK TITLE</th>
+                    <th>ARTIST</th>
+                    <th style={{ width: '60px' }}>BPM</th>
+                    <th style={{ width: '60px' }}>KEY</th>
+                    <th style={{ width: '70px' }}>TIME</th>
+                    <th style={{ width: '80px' }}>STATUS</th>
+                    <th style={{ width: '150px' }}>ACTION</th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {workspace?.tracks.length ? (
-                    workspace.tracks.map((track) => (
-                      <tr key={track.id}>
-                        <td><span className={`status-pill ${statusTone(track.status)}`}>{statusLabel(track.status, t)}</span></td>
-                        <td>
-                          <div className="title-cell">
-                            <strong>{track.title}</strong>
-                            <span>{track.lastAnalysisError ?? track.artist ?? t.noArtist}</span>
-                          </div>
-                        </td>
-                        <td>{track.bpm ? track.bpm.toFixed(1) : "--"}</td>
-                        <td>{track.camelotKey ?? "--"}</td>
-                        <td>{formatDuration(track.durationSeconds)}</td>
-                        <td>{track.analysisAttempts}</td>
-                        <td>{formatDate(track.createdAtUtc, language)}</td>
-                        <td>
-                          <div className="button-row compact">
-                            <button type="button" className="tiny-button" onClick={() => setSelectedDeckAId(track.id)} disabled={track.status.toLowerCase() !== "ready"}>{t.deckA}</button>
-                            <button type="button" className="tiny-button blue" onClick={() => setSelectedDeckBId(track.id)} disabled={track.status.toLowerCase() !== "ready"}>{t.deckB}</button>
-                            {track.status.toLowerCase() === "error" ? (
-                              <button type="button" className="tiny-button gold" onClick={() => void handleRetryTrack(track)}>{t.retry}</button>
-                            ) : null}
-                            <button type="button" className="tiny-button danger" onClick={() => void handleDeleteTrack(track)}>{t.delete}</button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr><td colSpan={8} className="empty-table">{t.emptyTable}</td></tr>
+                  {filteredTracks.map((track, i) => (
+                    <tr 
+                      key={track.id} 
+                      className={(track.id === selectedDeckAId || track.id === selectedDeckBId) ? 'selected' : ''}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/plain', track.id);
+                      }}
+                    >
+                      <td>{i + 1}</td>
+                      <td>{track.title}</td>
+                      <td className="small-text">{track.artist || "--"}</td>
+                      <td>{track.bpm ? track.bpm.toFixed(1) : "--"}</td>
+                      <td>{track.camelotKey || "--"}</td>
+                      <td>{formatDuration(track.durationSeconds)}</td>
+                      <td className="status-cell">{track.status}</td>
+                      <td>
+                        <div className="flex-row">
+                          <button className="action-btn deck-assign" disabled={track.status.toLowerCase() !== "ready"} onClick={() => setSelectedDeckAId(track.id)}>1</button>
+                          <button className="action-btn deck-assign" disabled={track.status.toLowerCase() !== "ready"} onClick={() => setSelectedDeckBId(track.id)}>2</button>
+                          <button className="action-btn" disabled={track.status.toLowerCase() === "analyzing"} onClick={() => handleRetryTrack(track)}>RETRY</button>
+                          <button className="action-btn danger" onClick={() => handleDeleteTrack(track)}>DEL</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredTracks.length === 0 && (
+                    <tr>
+                      <td colSpan={8} style={{ textAlign: 'center', padding: '2rem', color: 'var(--muted)' }}>NO TRACKS FOUND</td>
+                    </tr>
                   )}
                 </tbody>
               </table>
             </div>
-          </article>
+          </section>
         </section>
       </main>
     </div>

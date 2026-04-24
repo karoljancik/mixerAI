@@ -32,7 +32,12 @@ public sealed class WorkspaceController : ControllerBase
     {
         try
         {
-            var result = await _backendClient.RenderMixFromLibraryAsync(request.TrackAId, request.TrackBId, cancellationToken);
+            var result = await _backendClient.RenderMixFromLibraryAsync(
+                request.TrackAId,
+                request.TrackBId,
+                request.OverlayStartSeconds,
+                request.RightStartSeconds,
+                cancellationToken);
             return File(result, "audio/mpeg", "mixerai-transition-reference.mp3");
         }
         catch (Exception exception)
@@ -133,4 +138,6 @@ public sealed class RenderMixRequest
 {
     public Guid TrackAId { get; init; }
     public Guid TrackBId { get; init; }
+    public double? OverlayStartSeconds { get; init; }
+    public double? RightStartSeconds { get; init; }
 }

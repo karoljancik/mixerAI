@@ -202,7 +202,15 @@ apiGroup.MapPost("/mix/render-from-library", async (
     var fileA = new PhysicalFileFormFile(trackAActualPath, trackA.Title);
     var fileB = new PhysicalFileFormFile(trackBActualPath, trackB.Title);
 
-    var result = await renderService.RenderAsync(fileA, fileB, null, cancellationToken);
+    var result = await renderService.RenderAsync(
+        fileA,
+        fileB,
+        new MixRenderOptions
+        {
+            OverlayStartSeconds = request.OverlayStartSeconds,
+            RightStartSeconds = request.RightStartSeconds,
+        },
+        cancellationToken);
     return Results.File(result.Content, "audio/mpeg", result.FileName);
 });
 
@@ -257,7 +265,11 @@ static double? TryReadDouble(string? value)
     return double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : null;
 }
 
-public record RenderFromLibraryRequest(Guid TrackAId, Guid TrackBId);
+public record RenderFromLibraryRequest(
+    Guid TrackAId,
+    Guid TrackBId,
+    double? OverlayStartSeconds,
+    double? RightStartSeconds);
 
 // Adapter: wraps a physical file on disk as IFormFile for AiMixRenderService
 public sealed class PhysicalFileFormFile : IFormFile

@@ -33,7 +33,8 @@ def main() -> int:
     right_manifest = feature_manifests[args.right_set_id]
 
     checkpoint = torch.load(args.model_path, map_location="cpu")
-    input_size = len(build_pair_vector([0.0] * len(FEATURE_KEYS), [0.0] * len(FEATURE_KEYS)))
+    feature_keys = resolve_checkpoint_feature_keys(checkpoint)
+    input_size = len(build_pair_vector([0.0] * len(feature_keys), [0.0] * len(feature_keys)))
     model = TransitionScorer(
         input_size=input_size,
         hidden_size=int(checkpoint.get("hidden_size", 64)),
@@ -44,6 +45,8 @@ def main() -> int:
 
     normalization_mean = torch.tensor(checkpoint["normalization_mean"], dtype=torch.float32)
     normalization_std = torch.tensor(checkpoint["normalization_std"], dtype=torch.float32)
+    if normalization_mean.numel() != input_size or normalization_std.numel() != input_size:
+        raise SystemExit("Checkpoint normalization vectors are incompatible with the resolved feature set.")
 
     candidates = build_candidates(
         left_manifest,
@@ -51,6 +54,7 @@ def main() -> int:
         model,
         normalization_mean,
         normalization_std,
+        feature_keys,
         min_segment_index=args.min_segment_index,
     )
     ranked = sorted(candidates, key=lambda item: item["probability"], reverse=True)[: args.top_k]
@@ -73,6 +77,7 @@ def build_candidates(
     model: TransitionScorer,
     normalization_mean: torch.Tensor,
     normalization_std: torch.Tensor,
+    feature_keys: list[str],
     min_segment_index: int,
 ) -> list[dict]:
     left_segments = [segment for segment in left_manifest["segments"] if int(segment["index"]) >= min_segment_index]
@@ -80,22 +85,23 @@ def build_candidates(
 
     vectors: list[list[float]] = []
     metadata: list[dict] = []
+    bpm_key = "estimated_bpm"
 
     for left_segment in left_segments:
-        left_values = [float(left_segment["features"].get(key, 0.0)) for key in FEATURE_KEYS]
+        left_values = [float(left_segment["features"].get(key, 0.0)) for key in feature_keys]
         for right_segment in right_segments:
-            right_values = [float(right_segment["features"].get(key, 0.0)) for key in FEATURE_KEYS]
+            right_values = [float(right_segment["features"].get(key, 0.0)) for key in feature_keys]
             vectors.append(build_pair_vector(left_values, right_values))
             metadata.append(
                 {
                     "left_set_id": left_manifest["set_id"],
                     "left_segment_index": int(left_segment["index"]),
                     "left_start_seconds": float(left_segment["start_seconds"]),
-                    "left_bpm": float(left_segment["features"].get("estimated_bpm", 0.0)),
+                    "left_bpm": float(left_segment["features"].get(bpm_key, 0.0)),
                     "right_set_id": right_manifest["set_id"],
                     "right_segment_index": int(right_segment["index"]),
                     "right_start_seconds": float(right_segment["start_seconds"]),
-                    "right_bpm": float(right_segment["features"].get("estimated_bpm", 0.0)),
+                    "right_bpm": float(right_segment["features"].get(bpm_key, 0.0)),
                 }
             )
 
@@ -131,6 +137,35 @@ def load_feature_manifests(features_dir: Path) -> dict[str, dict]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         manifests[payload["set_id"]] = payload
     return manifests
+
+
+def resolve_checkpoint_feature_keys(checkpoint: dict) -> list[str]:
+    raw_feature_keys = checkpoint.get("feature_keys")
+    if isinstance(raw_feature_keys, list) and raw_feature_keys:
+        return [str(key) for key in raw_feature_keys]
+
+    state_dict = checkpoint.get("model_state_dict") or {}
+    first_layer = state_dict.get("input_projection.0.weight")
+    checkpoint_input_size = None
+    if hasattr(first_layer, "shape") and len(first_layer.shape) == 2:
+        checkpoint_input_size = int(first_layer.shape[1])
+
+    if checkpoint_input_size is None:
+        normalization_mean = checkpoint.get("normalization_mean")
+        if isinstance(normalization_mean, list):
+            checkpoint_input_size = len(normalization_mean)
+
+    if checkpoint_input_size is None or checkpoint_input_size % 6 != 0:
+        return FEATURE_KEYS
+
+    feature_count = checkpoint_input_size // 6
+    if feature_count <= 0:
+        return FEATURE_KEYS
+
+    if feature_count <= len(FEATURE_KEYS):
+        return FEATURE_KEYS[:feature_count]
+
+    return FEATURE_KEYS
 
 
 if __name__ == "__main__":

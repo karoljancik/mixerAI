@@ -45,6 +45,13 @@ export type TransitionRecommendationRequest = {
   topK: number;
 };
 
+export type RenderMixRequest = {
+  trackAId: string;
+  trackBId: string;
+  overlayStartSeconds?: number | null;
+  rightStartSeconds?: number | null;
+};
+
 export type MixStudioRequest = {
   generatedTrackStyle: string;
   generatedTrackDurationSeconds: number;
@@ -55,6 +62,14 @@ export type BeatMarker = {
   relativeSeconds: number;
   timelineSeconds: number;
   isBar: boolean;
+};
+
+export type WaveformBands = {
+  low: number[];
+  mid: number[];
+  high: number[];
+  energy: number[];
+  transient: number[];
 };
 
 export type MixTrackPreview = {
@@ -71,7 +86,9 @@ export type MixTrackPreview = {
 
 export type MixRecommendationPreview = {
   overlayStartSeconds: number;
+  transitionCueSeconds: number;
   rightStartSeconds: number;
+  transitionStyle: string;
   leftBpm: number;
   rightBpm: number;
   tempoRatio: number;

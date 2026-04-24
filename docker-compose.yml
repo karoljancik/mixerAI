@@ -1,3 +1,5 @@
+name: mixerai
+
 services:
   postgres:
     image: postgres:15
@@ -17,11 +19,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # AI data / model files (existing)
-      - ./data:/app/data
-      # Persistent storage for uploaded user tracks — survives container rebuilds!
       - tracks-data:/app/src/MixerAI.Backend/App_Data/UserTracks
-      # Persistent storage for rendered mixes
       - renders-data:/app/src/MixerAI.Backend/App_Data/RenderedMixes
     environment:
       - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=mixerai_db;Username=mixerai;Password=mixeraipassword

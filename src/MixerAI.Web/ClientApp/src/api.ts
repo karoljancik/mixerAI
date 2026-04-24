@@ -1,6 +1,7 @@
 import type {
   ApiError,
   MixAnalysisResult,
+  RenderMixRequest,
   MixStudioRequest,
   SessionResponse,
   Track,
@@ -120,13 +121,13 @@ export const api = {
     }
   },
 
-  renderMix(trackAId: string, trackBId: string): Promise<Blob> {
+  renderMix(request: RenderMixRequest): Promise<Blob> {
     return requestBlob("/api/bff/workspace/render-mix", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ trackAId, trackBId }),
+      body: JSON.stringify(request),
     });
   },
 

@@ -41,6 +41,14 @@ public sealed class MixerBackendClient : IMixerBackendClient
     }
 
     private sealed record IdentityLoginResult(string AccessToken);
+    private sealed record BackendTransitionRecommendation(
+        [property: System.Text.Json.Serialization.JsonPropertyName("left_set_id")] string LeftSetId,
+        [property: System.Text.Json.Serialization.JsonPropertyName("left_segment_index")] int LeftSegmentIndex,
+        [property: System.Text.Json.Serialization.JsonPropertyName("left_start_seconds")] double LeftStartSeconds,
+        [property: System.Text.Json.Serialization.JsonPropertyName("right_set_id")] string RightSetId,
+        [property: System.Text.Json.Serialization.JsonPropertyName("right_segment_index")] int RightSegmentIndex,
+        [property: System.Text.Json.Serialization.JsonPropertyName("right_start_seconds")] double RightStartSeconds,
+        [property: System.Text.Json.Serialization.JsonPropertyName("probability")] double Probability);
 
     // --- LIBRARY OPERATIONS ---
     public async Task<List<TrackViewModel>> GetTracksAsync(CancellationToken cancellationToken = default)
@@ -101,9 +109,20 @@ public sealed class MixerBackendClient : IMixerBackendClient
         return ms.ToArray();
     }
 
-    public async Task<byte[]> RenderMixFromLibraryAsync(Guid trackAId, Guid trackBId, CancellationToken cancellationToken = default)
+    public async Task<byte[]> RenderMixFromLibraryAsync(
+        Guid trackAId,
+        Guid trackBId,
+        double? overlayStartSeconds,
+        double? rightStartSeconds,
+        CancellationToken cancellationToken = default)
     {
-        var payload = new { trackAId, trackBId };
+        var payload = new
+        {
+            trackAId,
+            trackBId,
+            overlayStartSeconds,
+            rightStartSeconds,
+        };
         using var request = CreateAuthorizedJsonRequest(HttpMethod.Post, "/api/mix/render-from-library", payload);
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
@@ -139,8 +158,27 @@ public sealed class MixerBackendClient : IMixerBackendClient
             throw new InvalidOperationException(ParseBackendError(error));
         }
 
-        return await response.Content.ReadFromJsonAsync<List<TransitionRecommendationViewModel>>(cancellationToken)
-            ?? [];
+        var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return [];
+        }
+
+        var results = JsonSerializer.Deserialize<List<BackendTransitionRecommendation>>(payload, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        }) ?? [];
+
+        return results.Select(item => new TransitionRecommendationViewModel
+        {
+            LeftSetId = item.LeftSetId,
+            LeftSegmentIndex = item.LeftSegmentIndex,
+            LeftStartSeconds = item.LeftStartSeconds,
+            RightSetId = item.RightSetId,
+            RightSegmentIndex = item.RightSegmentIndex,
+            RightStartSeconds = item.RightStartSeconds,
+            Probability = item.Probability,
+        }).ToList();
     }
     
     // --- MIX JOB OPERATIONS ---
