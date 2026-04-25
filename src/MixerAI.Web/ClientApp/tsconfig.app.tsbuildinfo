@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/knob.tsx","./src/components/waveformcanvas.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/gainslider.tsx","./src/components/knob.tsx","./src/components/waveformcanvas.tsx"],"version":"5.9.3"}

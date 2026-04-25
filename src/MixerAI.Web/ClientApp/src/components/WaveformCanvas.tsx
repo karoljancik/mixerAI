@@ -6,6 +6,7 @@ const ZOOM_PX_PER_SEC = 112;
 const BAR_WIDTH_PX = 2;
 const BAR_GAP_PX = 1;
 const WAVEFORM_VERTICAL_PADDING = 4;
+const GRID_BAND_HEIGHT = 10;
 
 function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
@@ -66,6 +67,27 @@ function drawMirroredBar(
   context.fillStyle = color;
   context.fillRect(x, centerY - safeAmplitude, width, safeAmplitude - 1);
   context.fillRect(x, centerY + 1, width, safeAmplitude - 1);
+}
+
+function drawBeatMarker(
+  context: CanvasRenderingContext2D,
+  x: number,
+  height: number,
+  isBar: boolean,
+) {
+  const topBandHeight = isBar ? GRID_BAND_HEIGHT : GRID_BAND_HEIGHT - 3;
+  const bottomBandY = height - topBandHeight;
+
+  context.strokeStyle = isBar ? "rgba(255, 108, 108, 0.95)" : "rgba(225, 236, 255, 0.42)";
+  context.lineWidth = isBar ? 2.6 : 1.15;
+  context.beginPath();
+  context.moveTo(x + 0.5, 0);
+  context.lineTo(x + 0.5, height);
+  context.stroke();
+
+  context.fillStyle = isBar ? "rgba(255, 96, 96, 0.92)" : "rgba(210, 224, 255, 0.6)";
+  context.fillRect(x - (isBar ? 1 : 0), 0, isBar ? 3 : 1, topBandHeight);
+  context.fillRect(x - (isBar ? 1 : 0), bottomBandY, isBar ? 3 : 1, topBandHeight);
 }
 
 type WaveformCanvasProps = {
@@ -210,6 +232,10 @@ export function WaveformCanvas({
         const visibleTimeEnd = currentTime + (width / 2) / ZOOM_PX_PER_SEC;
 
         if (beatMarkers.length > 0) {
+          context.fillStyle = "rgba(255, 255, 255, 0.04)";
+          context.fillRect(0, 0, width, GRID_BAND_HEIGHT);
+          context.fillRect(0, height - GRID_BAND_HEIGHT, width, GRID_BAND_HEIGHT);
+
           for (let index = 0; index < beatMarkers.length; index += 1) {
             const marker = beatMarkers[index];
             if (marker.timelineSeconds < visibleTimeStart || marker.timelineSeconds > visibleTimeEnd) {
@@ -217,27 +243,7 @@ export function WaveformCanvas({
             }
 
             const x = Math.round((width / 2) + ((marker.timelineSeconds - currentTime) * ZOOM_PX_PER_SEC));
-
-            context.strokeStyle = marker.isBar ? "rgba(255, 50, 50, 0.95)" : "rgba(200, 200, 200, 0.7)";
-            context.lineWidth = marker.isBar ? 3 : 1.5;
-            context.beginPath();
-            context.moveTo(x, 0);
-            context.lineTo(x, height);
-            context.stroke();
-
-            context.fillStyle = marker.isBar ? "rgb(255, 78, 78)" : "rgb(200, 200, 200)";
-
-            context.beginPath();
-            context.moveTo(x, 0);
-            context.lineTo(x - 4, 6);
-            context.lineTo(x + 4, 6);
-            context.fill();
-
-            context.beginPath();
-            context.moveTo(x, height);
-            context.lineTo(x - 4, height - 6);
-            context.lineTo(x + 4, height - 6);
-            context.fill();
+            drawBeatMarker(context, x, height, marker.isBar);
           }
         }
       }

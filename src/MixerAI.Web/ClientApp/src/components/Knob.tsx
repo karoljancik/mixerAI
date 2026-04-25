@@ -40,7 +40,7 @@ export function Knob({ value, min, max, centerValue, label, onChange }: KnobProp
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     const delta = e.deltaY < 0 ? 1 : -1;
-    let newPct = pct + (delta * 0.05); // 5% physical turn per tick
+    let newPct = pct + (delta * 0.02); // 2% physical turn per tick (fine tuning)
     if (newPct > 1) newPct = 1;
     if (newPct < 0) newPct = 0;
     applyPct(newPct);

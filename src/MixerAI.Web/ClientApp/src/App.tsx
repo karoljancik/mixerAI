@@ -1,9 +1,11 @@
 // @ts-nocheck
 import { startTransition, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { api } from "./api";
+import { GainSlider } from "./components/GainSlider";
 import { WaveformCanvas } from "./components/WaveformCanvas";
 import { Knob } from "./components/Knob";
 import type {
+  BeatMarker,
   MixAnalysisResult,
   RenderMixRequest,
   SessionResponse,
@@ -45,6 +47,34 @@ function formatDate(value: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function formatPreciseSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return "0.000";
+  }
+
+  return seconds.toFixed(3);
+}
+
+function formatPreciseClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return "0:00.000";
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds - (minutes * 60);
+  return `${minutes}:${remainder.toFixed(3).padStart(6, "0")}`;
+}
+
+function parsePreciseSecondsInput(value: string): number | null {
+  const normalized = value.replace(",", ".").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 const EMPTY_WAVEFORM: WaveformBands = {
@@ -122,6 +152,35 @@ function parseWaveform(track: Track | null): WaveformBands {
   } catch {
     return EMPTY_WAVEFORM;
   }
+}
+
+function buildBeatMarkers(track: Track | null): BeatMarker[] {
+  if (!track?.bpm || !Number.isFinite(track.bpm) || track.bpm <= 0 || !Number.isFinite(track.durationSeconds) || track.durationSeconds <= 0) {
+    return [];
+  }
+
+  const beatPeriodSeconds = 60 / track.bpm;
+  if (!Number.isFinite(beatPeriodSeconds) || beatPeriodSeconds <= 0) {
+    return [];
+  }
+
+  const totalBeats = Math.ceil(track.durationSeconds / beatPeriodSeconds) + 1;
+  const markers: BeatMarker[] = [];
+
+  for (let index = 0; index < totalBeats; index += 1) {
+    const timelineSeconds = Number((index * beatPeriodSeconds).toFixed(3));
+    if (timelineSeconds > track.durationSeconds) {
+      break;
+    }
+
+    markers.push({
+      relativeSeconds: timelineSeconds,
+      timelineSeconds,
+      isBar: index % 4 === 0,
+    });
+  }
+
+  return markers;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -243,6 +302,8 @@ export default function App() {
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [libraryQuery, setLibraryQuery] = useState("");
+  const [uploadPending, setUploadPending] = useState(false);
+  const [uploadDragOver, setUploadDragOver] = useState(false);
 
   const [selectedDeckAId, setSelectedDeckAId] = useState("");
   const [dragOverA, setDragOverA] = useState(false);
@@ -358,6 +419,8 @@ export default function App() {
   const [useManualRenderPlan, setUseManualRenderPlan] = useState(false);
   const [manualOverlayStartSeconds, setManualOverlayStartSeconds] = useState(24);
   const [manualRightStartSeconds, setManualRightStartSeconds] = useState(32);
+  const [manualOverlayStartInput, setManualOverlayStartInput] = useState("24.000");
+  const [manualRightStartInput, setManualRightStartInput] = useState("32.000");
   const [renderPending, setRenderPending] = useState(false);
   const [renderedMixUrl, setRenderedMixUrl] = useState<string | null>(null);
   const [renderedMixName, setRenderedMixName] = useState("mixerai-transition-reference.mp3");
@@ -376,6 +439,10 @@ export default function App() {
   const [analysisPending, setAnalysisPending] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = useState<MixAnalysisResult | null>(null);
+  const [deckACurrentTime, setDeckACurrentTime] = useState(0);
+  const [deckBCurrentTime, setDeckBCurrentTime] = useState(0);
+  const [deckASeekInput, setDeckASeekInput] = useState("0.000");
+  const [deckBSeekInput, setDeckBSeekInput] = useState("0.000");
 
   const deckAAudioRef = useRef<HTMLAudioElement | null>(null);
   const deckBAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -553,20 +620,71 @@ export default function App() {
   }
 
   async function handleUploadTrack(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) {
       return;
     }
 
     try {
-      await api.uploadTrack(file);
-      setNotice(`Uploaded ${file.name}. Analysis has been queued.`);
-      await refreshWorkspace();
+      await uploadTracks(files);
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : "Upload failed.");
     } finally {
       event.target.value = "";
     }
+  }
+
+  async function uploadTracks(files: File[]) {
+    const validFiles = files.filter((file) => file.size > 0);
+    if (validFiles.length === 0) {
+      setWorkspaceError("Choose one or more non-empty audio files before uploading.");
+      return;
+    }
+
+    setUploadPending(true);
+    setWorkspaceError(null);
+    try {
+      const uploadedNames: string[] = [];
+      const failedUploads: string[] = [];
+
+      for (const file of validFiles) {
+        try {
+          await api.uploadTrack(file);
+          uploadedNames.push(file.name);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "Upload failed.";
+          failedUploads.push(`${file.name}: ${reason}`);
+        }
+      }
+
+      if (uploadedNames.length > 0) {
+        await refreshWorkspace(false);
+        setNotice(
+          uploadedNames.length === 1
+            ? `Uploaded ${uploadedNames[0]}. Analysis has been queued.`
+            : `Uploaded ${uploadedNames.length} tracks. Analysis has been queued.`,
+        );
+      }
+
+      if (failedUploads.length > 0) {
+        setWorkspaceError(
+          failedUploads.length === 1
+            ? failedUploads[0]
+            : `${failedUploads.length} uploads failed. First issue: ${failedUploads[0]}`,
+        );
+      }
+    } finally {
+      setUploadPending(false);
+    }
+  }
+
+  async function handleDroppedLibraryFiles(fileList: FileList | null) {
+    const files = Array.from(fileList ?? []);
+    if (files.length === 0) {
+      return;
+    }
+
+    await uploadTracks(files);
   }
 
   async function handleDeleteTrack(track: Track) {
@@ -689,6 +807,8 @@ export default function App() {
     setUseManualRenderPlan(true);
     setManualOverlayStartSeconds(analysisResult.recommendation.overlayStartSeconds);
     setManualRightStartSeconds(analysisResult.recommendation.rightStartSeconds);
+    setManualOverlayStartInput(formatPreciseSeconds(analysisResult.recommendation.overlayStartSeconds));
+    setManualRightStartInput(formatPreciseSeconds(analysisResult.recommendation.rightStartSeconds));
     setNotice("Analyzer timings loaded into the manual render controls.");
   }
 
@@ -712,20 +832,104 @@ export default function App() {
   const selectedTrackB = libraryTracks.find((track) => track.id === selectedDeckBId) ?? null;
   const deckAWaveform = parseWaveform(selectedTrackA);
   const deckBWaveform = parseWaveform(selectedTrackB);
+  const deckABeatMarkers = buildBeatMarkers(selectedTrackA);
+  const deckBBeatMarkers = buildBeatMarkers(selectedTrackB);
   const pairAssessment = buildPairAssessment(selectedTrackA, selectedTrackB);
   const practiceNotes = buildPracticeNotes(selectedTrackA, selectedTrackB);
 
-  const overlayMax = Math.max(16, Math.min(Math.floor((selectedTrackA?.durationSeconds ?? 90) - 8), 96));
-  const rightStartMax = Math.max(16, Math.min(Math.floor((selectedTrackB?.durationSeconds ?? 90) - 12), 120));
+  const overlayMax = Math.max(0, Math.min((selectedTrackA?.durationSeconds ?? 90) - 8, 96));
+  const rightStartMax = Math.max(0, Math.min((selectedTrackB?.durationSeconds ?? 90) - 12, 120));
   const profileName = workspace?.displayName ?? session?.displayName ?? session?.email ?? "MixerAI";
   const bpmDelta = selectedTrackA?.bpm && selectedTrackB?.bpm
     ? Math.abs(selectedTrackA.bpm - selectedTrackB.bpm)
     : null;
 
   useEffect(() => {
-    setManualOverlayStartSeconds((current) => clamp(current, 0, overlayMax));
-    setManualRightStartSeconds((current) => clamp(current, 0, rightStartMax));
+    const nextOverlay = clamp(manualOverlayStartSeconds, 0, overlayMax);
+    const nextRight = clamp(manualRightStartSeconds, 0, rightStartMax);
+
+    setManualOverlayStartSeconds(nextOverlay);
+    setManualRightStartSeconds(nextRight);
+    setManualOverlayStartInput(formatPreciseSeconds(nextOverlay));
+    setManualRightStartInput(formatPreciseSeconds(nextRight));
   }, [overlayMax, rightStartMax]);
+
+  useEffect(() => {
+    setDeckACurrentTime(0);
+    setDeckASeekInput("0.000");
+  }, [selectedDeckAId]);
+
+  useEffect(() => {
+    setDeckBCurrentTime(0);
+    setDeckBSeekInput("0.000");
+  }, [selectedDeckBId]);
+
+  function commitManualOverlayStartInput() {
+    setUseManualRenderPlan(true);
+    const parsed = parsePreciseSecondsInput(manualOverlayStartInput);
+    const nextValue = clamp(parsed ?? manualOverlayStartSeconds, 0, overlayMax);
+    setManualOverlayStartSeconds(nextValue);
+    setManualOverlayStartInput(formatPreciseSeconds(nextValue));
+  }
+
+  function commitManualRightStartInput() {
+    setUseManualRenderPlan(true);
+    const parsed = parsePreciseSecondsInput(manualRightStartInput);
+    const nextValue = clamp(parsed ?? manualRightStartSeconds, 0, rightStartMax);
+    setManualRightStartSeconds(nextValue);
+    setManualRightStartInput(formatPreciseSeconds(nextValue));
+  }
+
+  function applyDeckSeekPosition(
+    audioRef: React.RefObject<HTMLAudioElement | null>,
+    inputValue: string,
+    fallbackDuration: number | undefined,
+    setCurrentTime: (value: number) => void,
+    setInputValue: (value: string) => void,
+  ) {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    const parsed = parsePreciseSecondsInput(inputValue);
+    const candidate = parsed ?? 0;
+    const durationLimit = Number.isFinite(audio.duration) && audio.duration > 0
+      ? audio.duration
+      : (fallbackDuration ?? 0);
+    const nextValue = durationLimit > 0 ? clamp(candidate, 0, durationLimit) : Math.max(0, candidate);
+
+    audio.currentTime = nextValue;
+    setCurrentTime(nextValue);
+    setInputValue(formatPreciseSeconds(nextValue));
+  }
+
+  function handleResetDeck(
+    audioRef: React.RefObject<HTMLAudioElement | null>,
+    setPlaying: (value: boolean) => void,
+    setCurrentTime: (value: number) => void,
+    setInputValue: (value: string) => void,
+  ) {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+
+    setPlaying(false);
+    setCurrentTime(0);
+    setInputValue("0.000");
+  }
+
+  function handleUseCurrentDeckTimesForRender() {
+    const nextOverlay = clamp(deckACurrentTime, 0, overlayMax);
+    const nextRight = clamp(deckBCurrentTime, 0, rightStartMax);
+
+    setUseManualRenderPlan(true);
+    setManualOverlayStartSeconds(nextOverlay);
+    setManualRightStartSeconds(nextRight);
+    setManualOverlayStartInput(formatPreciseSeconds(nextOverlay));
+    setManualRightStartInput(formatPreciseSeconds(nextRight));
+  }
 
   const activeTrackCount = libraryTracks.filter((track) => {
     const status = track.status.toLowerCase();
@@ -865,6 +1069,7 @@ export default function App() {
             <WaveformCanvas 
               className="waveform-canvas" 
               samples={deckAWaveform} 
+              beatMarkers={deckABeatMarkers}
               accent="#08B2E3" 
               background="transparent" 
               audioRef={deckAAudioRef}
@@ -885,6 +1090,7 @@ export default function App() {
             <WaveformCanvas 
               className="waveform-canvas" 
               samples={deckBWaveform} 
+              beatMarkers={deckBBeatMarkers}
               accent="#08B2E3" 
               background="transparent" 
               audioRef={deckBAudioRef}
@@ -897,7 +1103,7 @@ export default function App() {
         <section className="decks-area">
           <article className="deck deck-a">
             <div className="deck-header">
-              <span className="deck-id">1</span>
+              <span className="deck-id" style={{ color: 'var(--blue)' }}>1</span>
               <select value={selectedDeckAId} onChange={(e) => setSelectedDeckAId(e.target.value)}>
                 <option value="">EMPTY</option>
                 {readyTracks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
@@ -907,33 +1113,68 @@ export default function App() {
               <div className="deck-info">
                 <h2 className="deck-title">{selectedTrackA?.title || "NO TRACK"}</h2>
                 <span className="deck-artist">{selectedTrackA?.artist || "Artist Info"}</span>
-                <div className="cdj-ctrl-row">
-                  
-                  <div className="deck-controls-wrapper">
-                  <div style={{ display: 'flex', gap: '15px' }}>
-                    
-                    <button className="cdj-btn cue" onClick={() => { if(deckAAudioRef.current) { deckAAudioRef.current.pause(); deckAAudioRef.current.currentTime = 0; }}}>CUE</button>
-                    <button className="cdj-btn play" onClick={() => { 
-                      if(deckAAudioRef.current) { 
-                        initAudioContextNode(deckAAudioRef.current, audioNodesA);
-                        deckAAudioRef.current.paused ? deckAAudioRef.current.play() : deckAAudioRef.current.pause(); 
-                        if (audioNodesA.current?.ctx.state === 'suspended') audioNodesA.current.ctx.resume();
-                      }
-                    }}>
-                      {isPlayingA ? "⏸" : "▶"}
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px', marginLeft: '20px' }}>
-                     <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqA.high} onChange={(v) => setEqA({...eqA, high: v})} />
-                     <Knob label="MID" min={-26} max={6} centerValue={0} value={eqA.mid} onChange={(v) => setEqA({...eqA, mid: v})} />
-                     <Knob label="LOW" min={-26} max={6} centerValue={0} value={eqA.low} onChange={(v) => setEqA({...eqA, low: v})} />
-                     <Knob label="GAIN" min={0} max={2} centerValue={1} value={eqA.gain} onChange={(v) => setEqA({...eqA, gain: v})} />
+                <div className="deck-control-strip">
+                  <div className="deck-controls-row">
+                    <div className="deck-controls-wrapper deck-controls-wrapper-mirrored">
+                      <div className="transport-controls-group transport-controls-group-mirrored">
+                        <button className="cdj-btn cue" onClick={() => handleResetDeck(deckAAudioRef, setIsPlayingA, setDeckACurrentTime, setDeckASeekInput)}>CUE</button>
+                        <button className="cdj-btn play" onClick={() => { 
+                          if(deckAAudioRef.current) { 
+                            initAudioContextNode(deckAAudioRef.current, audioNodesA);
+                            deckAAudioRef.current.paused ? deckAAudioRef.current.play() : deckAAudioRef.current.pause(); 
+                            if (audioNodesA.current?.ctx.state === 'suspended') audioNodesA.current.ctx.resume();
+                          }
+                        }}>
+                          {isPlayingA ? "⏸" : "▶"}
+                        </button>
+                      </div>
+                      <div className="eq-controls-group eq-controls-group-mirrored">
+                        <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqA.high} onChange={(v) => setEqA({...eqA, high: v})} />
+                        <Knob label="MID" min={-26} max={6} centerValue={0} value={eqA.mid} onChange={(v) => setEqA({...eqA, mid: v})} />
+                        <Knob label="LOW" min={-26} max={6} centerValue={0} value={eqA.low} onChange={(v) => setEqA({...eqA, low: v})} />
+                        <GainSlider label="GAIN" min={0} max={2} value={eqA.gain} onChange={(v) => setEqA({...eqA, gain: v})} />
+                      </div>
+                    </div>
+                    <div className="deck-position-panel">
+                      <div className="precision-row">
+                        <span className="precision-label">Live</span>
+                        <strong className="precision-readout">{formatPreciseClock(deckACurrentTime)}</strong>
+                        <button type="button" className="action-btn" onClick={() => setDeckASeekInput(formatPreciseSeconds(deckACurrentTime))}>NOW</button>
+                      </div>
+                      <div className="precision-row">
+                        <span className="precision-label">Jump To</span>
+                        <input
+                          className="precision-input"
+                          type="text"
+                          inputMode="decimal"
+                          value={deckASeekInput}
+                          onChange={(e) => setDeckASeekInput(e.target.value)}
+                          onBlur={() => applyDeckSeekPosition(deckAAudioRef, deckASeekInput, selectedTrackA?.durationSeconds, setDeckACurrentTime, setDeckASeekInput)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              applyDeckSeekPosition(deckAAudioRef, deckASeekInput, selectedTrackA?.durationSeconds, setDeckACurrentTime, setDeckASeekInput);
+                            }
+                          }}
+                        />
+                        <button type="button" className="action-btn" onClick={() => applyDeckSeekPosition(deckAAudioRef, deckASeekInput, selectedTrackA?.durationSeconds, setDeckACurrentTime, setDeckASeekInput)}>SET</button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-                </div>
-                <audio ref={deckAAudioRef} src={selectedTrackA ? `/api/bff/library/audio/${selectedTrackA.id}` : undefined} preload="auto" style={{display: 'none'}} onPlay={() => setIsPlayingA(true)} onPause={() => setIsPlayingA(false)} />
+                <audio
+                  ref={deckAAudioRef}
+                  src={selectedTrackA ? `/api/bff/library/audio/${selectedTrackA.id}` : undefined}
+                  preload="auto"
+                  style={{display: 'none'}}
+                  onPlay={() => setIsPlayingA(true)}
+                  onPause={() => setIsPlayingA(false)}
+                  onTimeUpdate={() => setDeckACurrentTime(deckAAudioRef.current?.currentTime ?? 0)}
+                  onSeeked={() => setDeckACurrentTime(deckAAudioRef.current?.currentTime ?? 0)}
+                  onLoadedMetadata={() => setDeckACurrentTime(deckAAudioRef.current?.currentTime ?? 0)}
+                />
               </div>
-              <div className="deck-stats">
+              <div className="deck-stats deck-stats-mirrored">
                 <div className="deck-stat-box bpm">
                   <span>BPM</span>
                   <strong>{selectedTrackA?.bpm ? selectedTrackA.bpm.toFixed(2) : "--"}</strong>
@@ -955,6 +1196,66 @@ export default function App() {
             </div>
             <div className="mixer-section">
               <span className="mixer-title">RENDER AI MIX</span>
+              <label className="toggle-row">
+                <span>Manual timing</span>
+                <input type="checkbox" checked={useManualRenderPlan} onChange={(e) => setUseManualRenderPlan(e.target.checked)} />
+              </label>
+              {useManualRenderPlan && (
+                <div className="precision-panel">
+                  <div className="precision-row">
+                    <span className="precision-label">B into A</span>
+                    <input
+                      className="precision-input"
+                      type="text"
+                      inputMode="decimal"
+                      value={manualOverlayStartInput}
+                      onChange={(e) => setManualOverlayStartInput(e.target.value)}
+                      onBlur={() => commitManualOverlayStartInput()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitManualOverlayStartInput();
+                        }
+                      }}
+                    />
+                    <button type="button" className="action-btn" onClick={() => {
+                      const nextValue = clamp(deckACurrentTime, 0, overlayMax);
+                      setManualOverlayStartSeconds(nextValue);
+                      setManualOverlayStartInput(formatPreciseSeconds(nextValue));
+                    }}>A NOW</button>
+                  </div>
+                  <div className="precision-row">
+                    <span className="precision-label">B start</span>
+                    <input
+                      className="precision-input"
+                      type="text"
+                      inputMode="decimal"
+                      value={manualRightStartInput}
+                      onChange={(e) => setManualRightStartInput(e.target.value)}
+                      onBlur={() => commitManualRightStartInput()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitManualRightStartInput();
+                        }
+                      }}
+                    />
+                    <button type="button" className="action-btn" onClick={() => {
+                      const nextValue = clamp(deckBCurrentTime, 0, rightStartMax);
+                      setManualRightStartSeconds(nextValue);
+                      setManualRightStartInput(formatPreciseSeconds(nextValue));
+                    }}>B NOW</button>
+                  </div>
+                  <div className="precision-row">
+                    <span className="precision-hint">Presnost: 0.001 s. Hodnoty sa pri rendere posielaju ako desatinne sekundy.</span>
+                  </div>
+                  <div className="precision-row">
+                    <button type="button" className="secondary-button" onClick={() => handleUseCurrentDeckTimesForRender()}>
+                      USE DECK TIMES
+                    </button>
+                  </div>
+                </div>
+              )}
               <button 
                 type="button" 
                 className="primary-button" 
@@ -985,31 +1286,66 @@ export default function App() {
               <div className="deck-info">
                 <h2 className="deck-title">{selectedTrackB?.title || "NO TRACK"}</h2>
                 <span className="deck-artist">{selectedTrackB?.artist || "Artist Info"}</span>
-                <div className="cdj-ctrl-row">
-                  
-                  <div className="deck-controls-wrapper">
-                  <div style={{ display: 'flex', gap: '15px' }}>
-                    
-                    <button className="cdj-btn cue" onClick={() => { if(deckBAudioRef.current) { deckBAudioRef.current.pause(); deckBAudioRef.current.currentTime = 0; }}}>CUE</button>
-                    <button className="cdj-btn play" onClick={() => { 
-                      if(deckBAudioRef.current) { 
-                        initAudioContextNode(deckBAudioRef.current, audioNodesB);
-                        deckBAudioRef.current.paused ? deckBAudioRef.current.play() : deckBAudioRef.current.pause(); 
-                        if (audioNodesB.current?.ctx.state === 'suspended') audioNodesB.current.ctx.resume();
-                      }
-                    }}>
-                      {isPlayingB ? "⏸" : "▶"}
-                    </button>
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px', marginLeft: '20px' }}>
-                     <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqB.high} onChange={(v) => setEqB({...eqB, high: v})} />
-                     <Knob label="MID" min={-26} max={6} centerValue={0} value={eqB.mid} onChange={(v) => setEqB({...eqB, mid: v})} />
-                     <Knob label="LOW" min={-26} max={6} centerValue={0} value={eqB.low} onChange={(v) => setEqB({...eqB, low: v})} />
-                     <Knob label="GAIN" min={0} max={2} centerValue={1} value={eqB.gain} onChange={(v) => setEqB({...eqB, gain: v})} />
+                <div className="deck-control-strip">
+                  <div className="deck-controls-row">
+                    <div className="deck-controls-wrapper">
+                      <div className="transport-controls-group">
+                        <button className="cdj-btn cue" onClick={() => handleResetDeck(deckBAudioRef, setIsPlayingB, setDeckBCurrentTime, setDeckBSeekInput)}>CUE</button>
+                        <button className="cdj-btn play" onClick={() => { 
+                          if(deckBAudioRef.current) { 
+                            initAudioContextNode(deckBAudioRef.current, audioNodesB);
+                            deckBAudioRef.current.paused ? deckBAudioRef.current.play() : deckBAudioRef.current.pause(); 
+                            if (audioNodesB.current?.ctx.state === 'suspended') audioNodesB.current.ctx.resume();
+                          }
+                        }}>
+                          {isPlayingB ? "⏸" : "▶"}
+                        </button>
+                      </div>
+                      <div className="eq-controls-group">
+                        <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqB.high} onChange={(v) => setEqB({...eqB, high: v})} />
+                        <Knob label="MID" min={-26} max={6} centerValue={0} value={eqB.mid} onChange={(v) => setEqB({...eqB, mid: v})} />
+                        <Knob label="LOW" min={-26} max={6} centerValue={0} value={eqB.low} onChange={(v) => setEqB({...eqB, low: v})} />
+                        <GainSlider label="GAIN" min={0} max={2} value={eqB.gain} onChange={(v) => setEqB({...eqB, gain: v})} />
+                      </div>
+                    </div>
+                    <div className="deck-position-panel">
+                      <div className="precision-row">
+                        <span className="precision-label">Live</span>
+                        <strong className="precision-readout">{formatPreciseClock(deckBCurrentTime)}</strong>
+                        <button type="button" className="action-btn" onClick={() => setDeckBSeekInput(formatPreciseSeconds(deckBCurrentTime))}>NOW</button>
+                      </div>
+                      <div className="precision-row">
+                        <span className="precision-label">Jump To</span>
+                        <input
+                          className="precision-input"
+                          type="text"
+                          inputMode="decimal"
+                          value={deckBSeekInput}
+                          onChange={(e) => setDeckBSeekInput(e.target.value)}
+                          onBlur={() => applyDeckSeekPosition(deckBAudioRef, deckBSeekInput, selectedTrackB?.durationSeconds, setDeckBCurrentTime, setDeckBSeekInput)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              applyDeckSeekPosition(deckBAudioRef, deckBSeekInput, selectedTrackB?.durationSeconds, setDeckBCurrentTime, setDeckBSeekInput);
+                            }
+                          }}
+                        />
+                        <button type="button" className="action-btn" onClick={() => applyDeckSeekPosition(deckBAudioRef, deckBSeekInput, selectedTrackB?.durationSeconds, setDeckBCurrentTime, setDeckBSeekInput)}>SET</button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-                </div>
-                <audio ref={deckBAudioRef} src={selectedTrackB ? `/api/bff/library/audio/${selectedTrackB.id}` : undefined} preload="auto" style={{display: 'none'}} onPlay={() => setIsPlayingB(true)} onPause={() => setIsPlayingB(false)} />
+                <audio
+                  ref={deckBAudioRef}
+                  src={selectedTrackB ? `/api/bff/library/audio/${selectedTrackB.id}` : undefined}
+                  preload="auto"
+                  style={{display: 'none'}}
+                  onPlay={() => setIsPlayingB(true)}
+                  onPause={() => setIsPlayingB(false)}
+                  onTimeUpdate={() => setDeckBCurrentTime(deckBAudioRef.current?.currentTime ?? 0)}
+                  onSeeked={() => setDeckBCurrentTime(deckBAudioRef.current?.currentTime ?? 0)}
+                  onLoadedMetadata={() => setDeckBCurrentTime(deckBAudioRef.current?.currentTime ?? 0)}
+                />
               </div>
               <div className="deck-stats">
                 <div className="deck-stat-box bpm">
@@ -1037,18 +1373,62 @@ export default function App() {
               ))}
             </div>
             <div className="tree-header" style={{ borderTop: '1px solid var(--panel-border)' }}>UPLOAD</div>
-            <div className="tree-content" style={{ flex: 'none', padding: '1rem', background: 'var(--panel-strong)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div
+              className={`tree-content upload-dropzone ${uploadDragOver ? "drag-over" : ""}`}
+              style={{ flex: 'none', padding: '1rem', background: 'var(--panel-strong)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setUploadDragOver(true);
+              }}
+              onDragLeave={(e) => {
+                if (e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                  return;
+                }
+                setUploadDragOver(false);
+              }}
+              onDrop={async (e) => {
+                e.preventDefault();
+                setUploadDragOver(false);
+                await handleDroppedLibraryFiles(e.dataTransfer.files);
+              }}
+            >
                <label className="upload-button" style={{ width: '100%', textAlign: 'center', justifyContent: 'center' }}>
-                 CHOOSE FILE
-                 <input type="file" accept=".mp3,.wav,.flac,.m4a" onChange={handleUploadTrack} />
+                 {uploadPending ? "UPLOADING..." : "CHOOSE FILES"}
+                 <input type="file" accept=".mp3,.wav,.flac,.m4a" multiple onChange={handleUploadTrack} disabled={uploadPending} />
                </label>
-               <button type="button" className="action-btn" style={{ width: '100%' }} onClick={() => handleRetryLibraryTracks()}>
+               <div className="upload-dropzone-hint">
+                 Drag & drop audio files sem z Prieskumnika.
+               </div>
+               <button type="button" className="action-btn" style={{ width: '100%' }} onClick={() => handleRetryLibraryTracks()} disabled={uploadPending}>
                  REANALYZE LIBRARY
                </button>
             </div>
           </aside>
 
-          <section className="browser-list">
+          <section
+            className={`browser-list ${uploadDragOver ? 'upload-drag-over' : ''}`}
+            onDragOver={(e) => {
+              if (e.dataTransfer.files.length === 0) {
+                return;
+              }
+              e.preventDefault();
+              setUploadDragOver(true);
+            }}
+            onDragLeave={(e) => {
+              if (e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                return;
+              }
+              setUploadDragOver(false);
+            }}
+            onDrop={async (e) => {
+              if (e.dataTransfer.files.length === 0) {
+                return;
+              }
+              e.preventDefault();
+              setUploadDragOver(false);
+              await handleDroppedLibraryFiles(e.dataTransfer.files);
+            }}
+          >
             <div className="list-toolbar">
               <input type="search" placeholder="Search Tracks..." value={libraryQuery} onChange={(e) => setLibraryQuery(e.target.value)} />
               <div>

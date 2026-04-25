@@ -77,6 +77,8 @@ public class LibraryController : ControllerBase
     }
 
     [HttpPost("upload")]
+    [RequestSizeLimit(250_000_000)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 250_000_000)]
     public async Task<IActionResult> UploadTrack(IFormFile file, CancellationToken cancellationToken)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);

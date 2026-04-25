@@ -1,0 +1,26 @@
+.gain-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 28px;
+  user-select: none;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.gain-slider-label {
+  font-size: 10px;
+  color: #888;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.gain-slider-input {
+  width: 16px;
+  height: 72px;
+  accent-color: #08b2e3;
+  cursor: ns-resize;
+  writing-mode: vertical-lr;
+  direction: rtl;
+}

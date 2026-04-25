@@ -24,6 +24,8 @@ public sealed class LibraryController : ControllerBase
     }
 
     [HttpPost("upload")]
+    [RequestSizeLimit(250_000_000)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 250_000_000)]
     public async Task<IActionResult> Upload([FromForm] IFormFile? file, CancellationToken cancellationToken)
     {
         if (file is null || file.Length == 0)

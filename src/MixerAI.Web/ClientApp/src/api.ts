@@ -20,10 +20,19 @@ async function readErrorMessage(response: Response): Promise<string> {
 }
 
 async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    credentials: "same-origin",
-    ...init,
-  });
+  let response: Response;
+  try {
+    response = await fetch(input, {
+      credentials: "same-origin",
+      ...init,
+    });
+  } catch (error) {
+    throw new Error(
+      error instanceof Error && error.message
+        ? `Network error: ${error.message}. If this happened during upload, the file may be too large or the server may be unavailable.`
+        : "Network error while contacting MixerAI. If this happened during upload, the file may be too large or the server may be unavailable.",
+    );
+  }
 
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
@@ -33,10 +42,19 @@ async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T
 }
 
 async function requestBlob(input: RequestInfo, init?: RequestInit): Promise<Blob> {
-  const response = await fetch(input, {
-    credentials: "same-origin",
-    ...init,
-  });
+  let response: Response;
+  try {
+    response = await fetch(input, {
+      credentials: "same-origin",
+      ...init,
+    });
+  } catch (error) {
+    throw new Error(
+      error instanceof Error && error.message
+        ? `Network error: ${error.message}.`
+        : "Network error while contacting MixerAI.",
+    );
+  }
 
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
