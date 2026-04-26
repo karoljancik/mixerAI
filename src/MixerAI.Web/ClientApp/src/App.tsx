@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { startTransition, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { api } from "./api";
 import { GainSlider } from "./components/GainSlider";
 import { WaveformCanvas } from "./components/WaveformCanvas";
@@ -15,6 +15,7 @@ import type {
   WaveformBands,
   WorkspaceSnapshot,
 } from "./types";
+import { MiniWaveform } from "./components/MiniWaveform";
 
 type AuthMode = "login" | "register";
 
@@ -23,7 +24,7 @@ type AuthFormState = {
   password: string;
 };
 
-const studioPills = ["ASP.NET Core BFF", "React + TypeScript", "Python audio engine", "Portfolio-ready demo"];
+const studioPills = ["AI DJ copilot", "Explainable transition scoring", "Set journey planner", "Playable demo renders"];
 
 function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -282,12 +283,196 @@ function buildPracticeNotes(trackA: Track | null, trackB: Track | null): string[
   return notes;
 }
 
-function downloadBlob(blobUrl: string, fileName: string) {
-  const anchor = document.createElement("a");
-  anchor.href = blobUrl;
-  anchor.download = fileName;
-  anchor.click();
+function average(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((total, value) => total + value, 0) / values.length;
 }
+
+function averageRange(values: number[], startRatio: number, endRatio: number): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const start = clamp(Math.floor(values.length * startRatio), 0, Math.max(0, values.length - 1));
+  const end = clamp(Math.ceil(values.length * endRatio), start + 1, values.length);
+  return average(values.slice(start, end));
+}
+
+function parseCamelot(value: string | null): { number: number; mode: string } | null {
+  if (!value) {
+    return null;
+  }
+
+  const match = value.trim().toUpperCase().match(/^(\d{1,2})([AB])$/);
+  if (!match) {
+    return null;
+  }
+
+  const number = Number(match[1]);
+  if (!Number.isFinite(number) || number < 1 || number > 12) {
+    return null;
+  }
+
+  return { number, mode: match[2] };
+}
+
+function camelotCompatibility(left: string | null, right: string | null): { score: number; label: string } {
+  const a = parseCamelot(left);
+  const b = parseCamelot(right);
+  if (!a || !b) {
+    return { score: 0.55, label: "Key confidence is limited" };
+  }
+
+  const wheelDistance = Math.min(Math.abs(a.number - b.number), 12 - Math.abs(a.number - b.number));
+  if (a.number === b.number && a.mode === b.mode) {
+    return { score: 1, label: "Same Camelot key" };
+  }
+
+  if (a.number === b.number && a.mode !== b.mode) {
+    return { score: 0.88, label: "Relative major/minor move" };
+  }
+
+  if (wheelDistance === 1 && a.mode === b.mode) {
+    return { score: 0.82, label: "Adjacent harmonic move" };
+  }
+
+  if (wheelDistance <= 2) {
+    return { score: 0.62, label: "Playable harmonic tension" };
+  }
+
+  return { score: 0.34, label: "Key clash risk" };
+}
+
+function trackEnergy(track: Track | null): number {
+  return average(parseWaveform(track).energy);
+}
+
+function trackIntroEnergy(track: Track | null): number {
+  return averageRange(parseWaveform(track).energy, 0, 0.18);
+}
+
+function trackOutroEnergy(track: Track | null): number {
+  return averageRange(parseWaveform(track).energy, 0.72, 0.96);
+}
+
+function trackLowEnd(track: Track | null): number {
+  return average(parseWaveform(track).low);
+}
+
+function classifyEnergy(track: Track | null): string {
+  const energy = trackEnergy(track);
+  if (energy >= 0.62) return "peak";
+  if (energy >= 0.48) return "drive";
+  if (energy >= 0.34) return "roll";
+  return "warmup";
+}
+
+function cueSeconds(track: Track | null, role: "out" | "in"): number {
+  if (!track?.durationSeconds || track.durationSeconds <= 0) {
+    return role === "out" ? 24 : 32;
+  }
+
+  const phrase = track.bpm && track.bpm > 0 ? (60 / track.bpm) * 16 : 32;
+  if (role === "out") {
+    return clamp(track.durationSeconds - (phrase * 2), 16, Math.max(16, track.durationSeconds - 8));
+  }
+
+  return clamp(phrase, 8, Math.max(8, Math.min(track.durationSeconds - 12, 64)));
+}
+
+function buildTransitionCopilot(trackA: Track | null, trackB: Track | null) {
+  const hasPair = Boolean(trackA && trackB);
+  const bpmDelta = trackA?.bpm && trackB?.bpm ? Math.abs(trackA.bpm - trackB.bpm) : null;
+  const tempoScore = bpmDelta === null ? 0.56 : clamp(1 - (bpmDelta / 14), 0.12, 1);
+  const harmonic = camelotCompatibility(trackA?.camelotKey ?? null, trackB?.camelotKey ?? null);
+  const energyA = trackEnergy(trackA);
+  const energyB = trackEnergy(trackB);
+  const energyDelta = Math.abs(energyA - energyB);
+  const energyScore = clamp(1 - (energyDelta * 1.45), 0.16, 1);
+  const phraseScore = hasPair ? 0.78 : 0.4;
+  const lowClash = trackLowEnd(trackA) > 0.58 && trackLowEnd(trackB) > 0.58;
+  const vocalRisk = averageRange(parseWaveform(trackA).mid, 0.66, 0.92) > 0.64 && averageRange(parseWaveform(trackB).mid, 0.05, 0.28) > 0.64;
+  const overall = hasPair
+    ? Math.round(((tempoScore * 0.3) + (harmonic.score * 0.28) + (energyScore * 0.24) + (phraseScore * 0.18)) * 100)
+    : 0;
+  const mixOut = cueSeconds(trackA, "out");
+  const mixIn = cueSeconds(trackB, "in");
+  const fadeBars = bpmDelta !== null && bpmDelta > 6 ? 8 : 16;
+  const transitionStyle = lowClash
+    ? "EQ swap with low-end handoff"
+    : energyB > energyA + 0.12
+      ? "energy lift into next drop"
+      : energyA > energyB + 0.12
+        ? "controlled cooldown blend"
+        : "smooth phrase blend";
+
+  const reasons = hasPair
+    ? [
+        bpmDelta === null ? "Tempo confidence is estimated from available metadata." : `Tempo gap is ${bpmDelta.toFixed(1)} BPM.`,
+        harmonic.label,
+        `Energy move: ${classifyEnergy(trackA)} to ${classifyEnergy(trackB)}.`,
+        `Suggested style: ${transitionStyle}.`,
+      ]
+    : ["Load two analyzed tracks to unlock the copilot plan."];
+
+  const risks = [
+    lowClash ? "Bass clash risk: keep Deck B low EQ down until the handoff." : "Low-end handoff looks manageable.",
+    vocalRisk ? "Midrange overlap risk: avoid a long vocal-on-vocal blend." : "No obvious midrange clash in the proposed window.",
+    bpmDelta !== null && bpmDelta > 8 ? "Wide tempo gap: use this as an advanced demo only." : "Tempo range is interview-friendly.",
+  ];
+
+  return {
+    overall,
+    tempoScore,
+    harmonicScore: harmonic.score,
+    energyScore,
+    phraseScore,
+    mixOut,
+    mixIn,
+    fadeBars,
+    transitionStyle,
+    reasons,
+    risks,
+  };
+}
+
+function buildSetJourney(tracks: Track[]): Track[] {
+  return [...tracks]
+    .sort((a, b) => {
+      const energyDelta = trackEnergy(a) - trackEnergy(b);
+      if (Math.abs(energyDelta) > 0.04) {
+        return energyDelta;
+      }
+
+      return (a.bpm ?? 0) - (b.bpm ?? 0);
+    })
+    .slice(0, 8);
+}
+
+function downloadBlob(blobUrl: string, fileName: string) {
+  const link = document.createElement("a");
+  link.href = blobUrl;
+  link.download = fileName;
+  link.click();
+}
+
+function PhaseMeter({ phase, isMaster, isSynced }: { phase: number, isMaster: boolean, isSynced: boolean }) {
+  const currentBlock = Math.floor(phase * 4);
+  return (
+    <div className="phase-meter">
+      {[0, 1, 2, 3].map(i => (
+        <div 
+          key={i} 
+          className={`phase-block ${i === currentBlock ? 'active' : ''} ${i === currentBlock && isMaster ? 'master' : ''} ${i === currentBlock && isSynced ? 'synced' : ''}`} 
+        />
+      ))}
+    </div>
+  );
+}
+
 
 export default function App() {
   const [session, setSession] = useState<SessionResponse | null>(null);
@@ -309,6 +494,27 @@ export default function App() {
   const [dragOverA, setDragOverA] = useState(false);
   const [dragOverB, setDragOverB] = useState(false);
   const [selectedDeckBId, setSelectedDeckBId] = useState("");
+
+  const libraryTracks = workspace?.tracks ?? [];
+  const readyTracks = libraryTracks.filter((track) => track.status.toLowerCase() === "ready");
+  const selectedTrackA = libraryTracks.find((track) => track.id === selectedDeckAId) ?? null;
+  const selectedTrackB = libraryTracks.find((track) => track.id === selectedDeckBId) ?? null;
+
+  const [masterDeck, setMasterDeck] = useState<'A' | 'B' | null>(null);
+  const [isSyncA, setIsSyncA] = useState(false);
+  const [isSyncB, setIsSyncB] = useState(false);
+  const [renderStyle, setRenderStyle] = useState("bass_swap");
+  const [renderQuality, setRenderQuality] = useState<RenderQualityResult | null>(null);
+
+
+  const effectiveBPMA = isSyncA && masterDeck === 'B' && selectedTrackB?.bpm
+    ? selectedTrackB.bpm
+    : (selectedTrackA?.bpm ?? null);
+
+  const effectiveBPMB = isSyncB && masterDeck === 'A' && selectedTrackA?.bpm
+    ? selectedTrackA.bpm
+    : (selectedTrackB?.bpm ?? null);
+
   const [crossfader, setCrossfader] = useState(50);
   const [isPlayingA, setIsPlayingA] = useState(false);
   const [eqA, setEqA] = useState({ high: 0, mid: 0, low: 0, gain: 1 });
@@ -381,21 +587,24 @@ export default function App() {
     const startX = e.clientX;
     const startTime = audio.currentTime;
     const ZOOM_PX_PER_SEC = 112;
-    const resolvedDuration = Number.isFinite(audio.duration) && audio.duration > 0
-      ? audio.duration
-      : (durationSeconds ?? 0);
+    
+    // Explicitly use durationSeconds from metadata if audio.duration is not yet final (e.g. Infinity/NaN)
+    const audioDur = audio.duration;
+    const resolvedDuration = (Number.isFinite(audioDur) && audioDur > 0)
+      ? audioDur
+      : (durationSeconds && durationSeconds > 0 ? durationSeconds : 0);
 
     const clampTime = (value) => {
-      if (resolvedDuration > 0) {
-        return Math.max(0, Math.min(value, resolvedDuration));
-      }
-
-      return Math.max(0, value);
+      if (resolvedDuration <= 0) return Math.max(0, value);
+      return Math.max(0, Math.min(value, resolvedDuration));
     };
 
     const updateScrubPosition = (clientX) => {
       const deltaX = clientX - startX;
-      audio.currentTime = clampTime(startTime - (deltaX / ZOOM_PX_PER_SEC));
+      const targetTime = clampTime(startTime - (deltaX / ZOOM_PX_PER_SEC));
+      if (Number.isFinite(targetTime)) {
+        audio.currentTime = targetTime;
+      }
     };
 
     updateScrubPosition(e.clientX);
@@ -430,6 +639,8 @@ export default function App() {
     rightSetId: "",
     topK: 5,
   });
+
+
   const [recommendationPending, setRecommendationPending] = useState(false);
   const [recommendationError, setRecommendationError] = useState<string | null>(null);
   const [recommendationResults, setRecommendationResults] = useState<TransitionRecommendation[]>([]);
@@ -443,9 +654,13 @@ export default function App() {
   const [deckBCurrentTime, setDeckBCurrentTime] = useState(0);
   const [deckASeekInput, setDeckASeekInput] = useState("0.000");
   const [deckBSeekInput, setDeckBSeekInput] = useState("0.000");
+  const [previewTrackId, setPreviewTrackId] = useState<string | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
 
   const deckAAudioRef = useRef<HTMLAudioElement | null>(null);
   const deckBAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -472,6 +687,74 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  // Continuous Phase & Tempo Sync Loop
+  useEffect(() => {
+    let intervalId: any;
+
+    const syncProcessor = () => {
+      // Sync Deck A to Master B
+      if (isSyncA && masterDeck === 'B' && selectedTrackA?.bpm && selectedTrackB?.bpm && deckAAudioRef.current && deckBAudioRef.current) {
+        const audioA = deckAAudioRef.current;
+        const audioB = deckBAudioRef.current;
+        
+        if (!audioA.paused && !audioB.paused) {
+          const baseRate = selectedTrackB.bpm / selectedTrackA.bpm;
+          const periodA = 60 / selectedTrackA.bpm;
+          const periodB = 60 / selectedTrackB.bpm;
+          
+          // Calculate phases (0..1)
+          const phaseA = (audioA.currentTime % periodA) / periodA;
+          const phaseB = (audioB.currentTime % periodB) / periodB;
+          
+          let diff = phaseB - phaseA;
+          if (diff > 0.5) diff -= 1;
+          if (diff < -0.5) diff += 1;
+          
+          // Phase pulling: speed up if behind, slow down if ahead
+          // diff > 0 means Master (B) is ahead of Sync (A)
+          const nudge = diff * 0.15; 
+          audioA.playbackRate = clamp(baseRate * (1 + nudge), baseRate * 0.90, baseRate * 1.10);
+        } else {
+          const baseRate = selectedTrackB.bpm / selectedTrackA.bpm;
+          audioA.playbackRate = baseRate;
+        }
+      } else if (!isSyncA) {
+        if (deckAAudioRef.current) deckAAudioRef.current.playbackRate = 1.0;
+      }
+
+      // Sync Deck B to Master A
+      if (isSyncB && masterDeck === 'A' && selectedTrackA?.bpm && selectedTrackB?.bpm && deckAAudioRef.current && deckBAudioRef.current) {
+        const audioA = deckAAudioRef.current;
+        const audioB = deckBAudioRef.current;
+        
+        if (!audioA.paused && !audioB.paused) {
+          const baseRate = selectedTrackA.bpm / selectedTrackB.bpm;
+          const periodA = 60 / selectedTrackA.bpm;
+          const periodB = 60 / selectedTrackB.bpm;
+          
+          const phaseA = (audioA.currentTime % periodA) / periodA;
+          const phaseB = (audioB.currentTime % periodB) / periodB;
+          
+          let diff = phaseA - phaseB; // phaseA is Master
+          if (diff > 0.5) diff -= 1;
+          if (diff < -0.5) diff += 1;
+          
+          const nudge = diff * 0.15;
+          audioB.playbackRate = clamp(baseRate * (1 + nudge), baseRate * 0.90, baseRate * 1.10);
+        } else {
+          const baseRate = selectedTrackA.bpm / selectedTrackB.bpm;
+          audioB.playbackRate = baseRate;
+        }
+      } else if (!isSyncB) {
+        if (deckBAudioRef.current) deckBAudioRef.current.playbackRate = 1.0;
+      }
+    };
+
+    intervalId = setInterval(syncProcessor, 50); // Correct 20 times per second
+    return () => clearInterval(intervalId);
+  }, [isSyncA, isSyncB, masterDeck, selectedTrackA?.bpm, selectedTrackB?.bpm, isPlayingA, isPlayingB]);
+
 
   useEffect(() => {
     if (!session?.isAuthenticated) {
@@ -551,6 +834,14 @@ export default function App() {
       }
     };
   }, [renderedMixUrl]);
+
+  useEffect(() => {
+    if (previewTrackId && previewAudioRef.current) {
+      previewAudioRef.current.play().catch(() => {
+        // Browser might block, that's okay
+      });
+    }
+  }, [previewTrackId]);
 
   useEffect(() => {
     if (!session?.isAuthenticated) {
@@ -742,21 +1033,30 @@ export default function App() {
         trackBId: selectedDeckBId,
         overlayStartSeconds: useManualRenderPlan ? manualOverlayStartSeconds : null,
         rightStartSeconds: useManualRenderPlan ? manualRightStartSeconds : null,
+        transitionStyle: renderStyle,
       };
 
-      const blob = await api.renderMix(request);
+      const response = await api.renderMix(request);
+      
+      // Convert base64 back to blob for playback
+      const audioData = atob(response.base64Audio);
+      const arrayBuffer = new ArrayBuffer(audioData.length);
+      const view = new Uint8Array(arrayBuffer);
+      for (let i = 0; i < audioData.length; i++) {
+        view[i] = audioData.charCodeAt(i);
+      }
+      const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+
       if (renderedMixUrl) {
         URL.revokeObjectURL(renderedMixUrl);
       }
 
       const blobUrl = URL.createObjectURL(blob);
       setRenderedMixUrl(blobUrl);
-      setRenderedMixName(
-        `${selectedTrackA?.title ?? "deck-a"}-to-${selectedTrackB?.title ?? "deck-b"}-showcase-mix.mp3`
-          .toLowerCase()
-          .replace(/[^a-z0-9.-]+/g, "-"),
-      );
-      setNotice("Mix preview rendered. You can audition it in-app and export the MP3.");
+      setRenderedMixName(response.fileName);
+      setRenderQuality(response.quality);
+
+      setNotice("Mix rendered and verified. Analysis complete.");
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : "Mix render failed.");
     } finally {
@@ -812,8 +1112,6 @@ export default function App() {
     setNotice("Analyzer timings loaded into the manual render controls.");
   }
 
-  const readyTracks = workspace?.tracks.filter((track) => track.status.toLowerCase() === "ready") ?? [];
-  const libraryTracks = workspace?.tracks ?? [];
   const filteredTracks = libraryTracks.filter((track) => {
     const query = libraryQuery.trim().toLowerCase();
     if (!query) {
@@ -828,14 +1126,14 @@ export default function App() {
     ].some((value) => value.toLowerCase().includes(query));
   });
 
-  const selectedTrackA = libraryTracks.find((track) => track.id === selectedDeckAId) ?? null;
-  const selectedTrackB = libraryTracks.find((track) => track.id === selectedDeckBId) ?? null;
-  const deckAWaveform = parseWaveform(selectedTrackA);
-  const deckBWaveform = parseWaveform(selectedTrackB);
-  const deckABeatMarkers = buildBeatMarkers(selectedTrackA);
-  const deckBBeatMarkers = buildBeatMarkers(selectedTrackB);
+  const deckAWaveform = useMemo(() => parseWaveform(selectedTrackA), [selectedTrackA]);
+  const deckBWaveform = useMemo(() => parseWaveform(selectedTrackB), [selectedTrackB]);
+  const deckABeatMarkers = useMemo(() => buildBeatMarkers(selectedTrackA), [selectedTrackA]);
+  const deckBBeatMarkers = useMemo(() => buildBeatMarkers(selectedTrackB), [selectedTrackB]);
   const pairAssessment = buildPairAssessment(selectedTrackA, selectedTrackB);
   const practiceNotes = buildPracticeNotes(selectedTrackA, selectedTrackB);
+  const transitionCopilot = buildTransitionCopilot(selectedTrackA, selectedTrackB);
+  const setJourney = useMemo(() => buildSetJourney(readyTracks), [readyTracks]);
 
   const overlayMax = Math.max(0, Math.min((selectedTrackA?.durationSeconds ?? 90) - 8, 96));
   const rightStartMax = Math.max(0, Math.min((selectedTrackB?.durationSeconds ?? 90) - 12, 120));
@@ -929,6 +1227,67 @@ export default function App() {
     setManualRightStartSeconds(nextRight);
     setManualOverlayStartInput(formatPreciseSeconds(nextOverlay));
     setManualRightStartInput(formatPreciseSeconds(nextRight));
+  }
+
+  function handleApplyCopilotPlan() {
+    const nextOverlay = clamp(transitionCopilot.mixOut, 0, overlayMax);
+    const nextRight = clamp(transitionCopilot.mixIn, 0, rightStartMax);
+
+    setUseManualRenderPlan(true);
+    setManualOverlayStartSeconds(nextOverlay);
+    setManualRightStartSeconds(nextRight);
+    setManualOverlayStartInput(formatPreciseSeconds(nextOverlay));
+    setManualRightStartInput(formatPreciseSeconds(nextRight));
+    setNotice("Copilot cue plan loaded into the render controls.");
+  }
+
+  function togglePreview(trackId: string) {
+    if (previewTrackId === trackId) {
+      if (isPreviewing) {
+        previewAudioRef.current?.pause();
+        setIsPreviewing(false);
+      } else {
+        previewAudioRef.current?.play().catch(() => {});
+        setIsPreviewing(true);
+      }
+    } else {
+      setPreviewTrackId(trackId);
+      setIsPreviewing(true);
+      // We need to wait for src update, but autoPlay should handle it. 
+      // To be safe, we can trigger play in a timeout or effect.
+    }
+  }
+
+  function handlePreviewSeek(time: number) {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.currentTime = time;
+      setPreviewCurrentTime(time);
+    }
+  }
+
+  function handleBuildInterviewDemo() {
+    const candidates = readyTracks
+      .flatMap((left, leftIndex) => readyTracks.slice(leftIndex + 1).map((right) => ({
+        left,
+        right,
+        plan: buildTransitionCopilot(left, right),
+      })))
+      .sort((a, b) => b.plan.overall - a.plan.overall);
+
+    const best = candidates[0];
+    if (!best) {
+      setWorkspaceError("Upload and analyze at least two tracks before building a demo.");
+      return;
+    }
+
+    setSelectedDeckAId(best.left.id);
+    setSelectedDeckBId(best.right.id);
+    setUseManualRenderPlan(true);
+    setManualOverlayStartSeconds(best.plan.mixOut);
+    setManualRightStartSeconds(best.plan.mixIn);
+    setManualOverlayStartInput(formatPreciseSeconds(best.plan.mixOut));
+    setManualRightStartInput(formatPreciseSeconds(best.plan.mixIn));
+    setNotice(`Demo pair selected: ${best.left.title} into ${best.right.title}. Render it when ready.`);
   }
 
   const activeTrackCount = libraryTracks.filter((track) => {
@@ -1048,6 +1407,9 @@ export default function App() {
           <button type="button" className="action-btn" onClick={() => refreshWorkspace()} disabled={workspaceLoading}>
             {workspaceLoading ? "REFRESHING" : "REFRESH"}
           </button>
+          <button type="button" className="action-btn deck-assign" onClick={() => handleBuildInterviewDemo()}>
+            BUILD DEMO
+          </button>
           <button type="button" className="action-btn warn" onClick={() => handleLogout()}>
             LOGOUT
           </button>
@@ -1070,7 +1432,7 @@ export default function App() {
               className="waveform-canvas" 
               samples={deckAWaveform} 
               beatMarkers={deckABeatMarkers}
-              accent="#08B2E3" 
+              accent="#EF233C" 
               background="transparent" 
               audioRef={deckAAudioRef}
               durationSeconds={selectedTrackA?.durationSeconds}
@@ -1121,12 +1483,49 @@ export default function App() {
                         <button className="cdj-btn play" onClick={() => { 
                           if(deckAAudioRef.current) { 
                             initAudioContextNode(deckAAudioRef.current, audioNodesA);
+                            
+                            // Snap phase on PLAY if SYNC is active and Master exists
+                            if (deckAAudioRef.current.paused && isSyncA && masterDeck === 'B' && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                              const pA = 60 / selectedTrackA.bpm;
+                              const pB = 60 / selectedTrackB.bpm;
+                              const phaseM = (deckBAudioRef.current.currentTime % pB) / pB;
+                              const targetTime = Math.floor(deckAAudioRef.current.currentTime / pA) * pA + (phaseM * pA);
+                              deckAAudioRef.current.currentTime = targetTime;
+                              setDeckACurrentTime(targetTime);
+                            }
+
                             deckAAudioRef.current.paused ? deckAAudioRef.current.play() : deckAAudioRef.current.pause(); 
                             if (audioNodesA.current?.ctx.state === 'suspended') audioNodesA.current.ctx.resume();
                           }
                         }}>
                           {isPlayingA ? "⏸" : "▶"}
                         </button>
+                        <div className="sync-controls-group">
+                          <button className={`master-btn ${masterDeck === 'A' ? 'active' : ''}`} onClick={() => {
+                            const nextMaster = masterDeck === 'A' ? null : 'A';
+                            setMasterDeck(nextMaster);
+                            if (nextMaster === 'A' && isSyncB && deckAAudioRef.current && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                              const pA = 60 / selectedTrackA.bpm;
+                              const pB = 60 / selectedTrackB.bpm;
+                              const phaseM = (deckAAudioRef.current.currentTime % pA) / pA;
+                              const targetTime = Math.floor(deckBAudioRef.current.currentTime / pB) * pB + (phaseM * pB);
+                              deckBAudioRef.current.currentTime = targetTime;
+                              setDeckBCurrentTime(targetTime);
+                            }
+                          }}>MASTER</button>
+                          <button className={`sync-btn ${isSyncA ? 'active' : ''}`} onClick={() => {
+                            const nextSync = !isSyncA;
+                            setIsSyncA(nextSync);
+                            if (nextSync && masterDeck === 'B' && deckAAudioRef.current && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                              const pA = 60 / selectedTrackA.bpm;
+                              const pB = 60 / selectedTrackB.bpm;
+                              const phaseM = (deckBAudioRef.current.currentTime % pB) / pB;
+                              const targetTime = Math.floor(deckAAudioRef.current.currentTime / pA) * pA + (phaseM * pA);
+                              deckAAudioRef.current.currentTime = targetTime;
+                              setDeckACurrentTime(targetTime);
+                            }
+                          }}>SYNC</button>
+                        </div>
                       </div>
                       <div className="eq-controls-group eq-controls-group-mirrored">
                         <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqA.high} onChange={(v) => setEqA({...eqA, high: v})} />
@@ -1175,9 +1574,16 @@ export default function App() {
                 />
               </div>
               <div className="deck-stats deck-stats-mirrored">
-                <div className="deck-stat-box bpm">
+                 <div className="deck-stat-box bpm">
                   <span>BPM</span>
-                  <strong>{selectedTrackA?.bpm ? selectedTrackA.bpm.toFixed(2) : "--"}</strong>
+                  <div className="stat-value">
+                    <strong>{effectiveBPMA ? effectiveBPMA.toFixed(2) : "--"}</strong>
+                    <PhaseMeter 
+                      phase={(deckAAudioRef.current?.currentTime || 0) % (60 / (selectedTrackA?.bpm || 120)) / (60 / (selectedTrackA?.bpm || 120))} 
+                      isMaster={masterDeck === 'A'} 
+                      isSynced={isSyncA} 
+                    />
+                  </div>
                 </div>
                 <div className="deck-stat-box">
                   <span>KEY</span>
@@ -1191,15 +1597,31 @@ export default function App() {
             <div className="mixer-section">
               <span className="mixer-title">CROSSFADER MIN / MAX</span>
               <div className="crossfader-container">
-                <input type="range" min="0" max="100" value={crossfader} onChange={(e) => setCrossfader(Number(e.target.value))} />
+                <input className="crossfader-input" type="range" min="0" max="100" value={crossfader} onChange={(e) => setCrossfader(Number(e.target.value))} />
               </div>
             </div>
             <div className="mixer-section">
               <span className="mixer-title">RENDER AI MIX</span>
-              <label className="toggle-row">
+               <label className="toggle-row">
                 <span>Manual timing</span>
                 <input type="checkbox" checked={useManualRenderPlan} onChange={(e) => setUseManualRenderPlan(e.target.checked)} />
               </label>
+
+              <div className="precision-row" style={{ marginTop: '4px', marginBottom: '8px' }}>
+                <span className="precision-label">Style</span>
+                <select 
+                  className="precision-input" 
+                  value={renderStyle} 
+                  onChange={(e) => setRenderStyle(e.target.value)}
+                  style={{ background: '#111', color: 'var(--blue)', border: '1px solid #333', fontSize: '10px', height: '22px' }}
+                >
+                  <option value="bass_swap">BASS SWAP (Club-style EQ)</option>
+                  <option value="double_drop">DOUBLE DROP (Energy lift)</option>
+                  <option value="echo_out">ECHO OUT (Wash-out exit)</option>
+                  <option value="blend">SMOOTH BLEND</option>
+                </select>
+              </div>
+
               {useManualRenderPlan && (
                 <div className="precision-panel">
                   <div className="precision-row">
@@ -1259,13 +1681,38 @@ export default function App() {
               <button 
                 type="button" 
                 className="primary-button" 
-                onClick={() => handleRenderMix()} 
+                onClick={() => {
+                  setRenderQuality(null);
+                  handleRenderMix();
+                }} 
                 disabled={renderPending || !selectedDeckAId || !selectedDeckBId}
                 style={{ width: '100%', marginBottom: '0.5rem' }}
               >
-                {renderPending ? "RENDERING..." : "RENDER"}
+                {renderPending ? "RENDERING & VERIFYING..." : "RENDER"}
               </button>
-              {renderedMixUrl && (
+
+              {renderQuality && (
+                <div className="quality-card" style={{ 
+                  background: '#111', 
+                  borderLeft: `3px solid ${renderQuality.score >= 75 ? 'var(--green)' : renderQuality.score >= 50 ? 'var(--gold)' : 'var(--red)'}`,
+                  padding: '8px',
+                  marginBottom: '10px',
+                  fontSize: '11px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ color: 'var(--gray)' }}>QUALITY ASSESSMENT</span>
+                    <strong style={{ color: renderQuality.score >= 75 ? 'var(--green)' : 'var(--gold)' }}>{renderQuality.score}/100 - {renderQuality.quality}</strong>
+                  </div>
+                  <p style={{ margin: '0 0 6px 0', color: '#fff' }}>{renderQuality.summary}</p>
+                  {renderQuality.feedback.length > 0 && (
+                    <ul style={{ margin: 0, paddingLeft: '15px', color: 'rgba(255,100,100,0.9)' }}>
+                      {renderQuality.feedback.map((f, i) => <li key={i}>{f}</li>)}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {renderedMixUrl && renderQuality && (
                 <div className="flex-row" style={{ width: '100%' }}>
                   <audio controls src={renderedMixUrl} style={{ width: '100%', height: '30px' }} />
                   <button className="action-btn" onClick={() => downloadBlob(renderedMixUrl, renderedMixName)}>EXPORT</button>
@@ -1294,12 +1741,49 @@ export default function App() {
                         <button className="cdj-btn play" onClick={() => { 
                           if(deckBAudioRef.current) { 
                             initAudioContextNode(deckBAudioRef.current, audioNodesB);
+                            
+                            // Snap phase on PLAY if SYNC is active and Master exists
+                            if (deckBAudioRef.current.paused && isSyncB && masterDeck === 'A' && deckAAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                              const pA = 60 / selectedTrackA.bpm;
+                              const pB = 60 / selectedTrackB.bpm;
+                              const phaseM = (deckAAudioRef.current.currentTime % pA) / pA;
+                              const targetTime = Math.floor(deckBAudioRef.current.currentTime / pB) * pB + (phaseM * pB);
+                              deckBAudioRef.current.currentTime = targetTime;
+                              setDeckBCurrentTime(targetTime);
+                            }
+
                             deckBAudioRef.current.paused ? deckBAudioRef.current.play() : deckBAudioRef.current.pause(); 
                             if (audioNodesB.current?.ctx.state === 'suspended') audioNodesB.current.ctx.resume();
                           }
                         }}>
                           {isPlayingB ? "⏸" : "▶"}
                         </button>
+                        <div className="sync-controls-group">
+                          <button className={`master-btn ${masterDeck === 'B' ? 'active' : ''}`} onClick={() => {
+                            const nextMaster = masterDeck === 'B' ? null : 'B';
+                            setMasterDeck(nextMaster);
+                            if (nextMaster === 'B' && isSyncA && deckAAudioRef.current && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                              const pA = 60 / selectedTrackA.bpm;
+                              const pB = 60 / selectedTrackB.bpm;
+                              const phaseM = (deckBAudioRef.current.currentTime % pB) / pB;
+                              const targetTime = Math.floor(deckAAudioRef.current.currentTime / pA) * pA + (phaseM * pA);
+                              deckAAudioRef.current.currentTime = targetTime;
+                              setDeckACurrentTime(targetTime);
+                            }
+                          }}>MASTER</button>
+                          <button className={`sync-btn ${isSyncB ? 'active' : ''}`} onClick={() => {
+                            const nextSync = !isSyncB;
+                            setIsSyncB(nextSync);
+                            if (nextSync && masterDeck === 'A' && deckAAudioRef.current && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                              const pA = 60 / selectedTrackA.bpm;
+                              const pB = 60 / selectedTrackB.bpm;
+                              const phaseM = (deckAAudioRef.current.currentTime % pA) / pA;
+                              const targetTime = Math.floor(deckBAudioRef.current.currentTime / pB) * pB + (phaseM * pB);
+                              deckBAudioRef.current.currentTime = targetTime;
+                              setDeckBCurrentTime(targetTime);
+                            }
+                          }}>SYNC</button>
+                        </div>
                       </div>
                       <div className="eq-controls-group">
                         <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqB.high} onChange={(v) => setEqB({...eqB, high: v})} />
@@ -1348,9 +1832,16 @@ export default function App() {
                 />
               </div>
               <div className="deck-stats">
-                <div className="deck-stat-box bpm">
+                 <div className="deck-stat-box bpm">
                   <span>BPM</span>
-                  <strong>{selectedTrackB?.bpm ? selectedTrackB.bpm.toFixed(2) : "--"}</strong>
+                  <div className="stat-value">
+                    <strong>{effectiveBPMB ? effectiveBPMB.toFixed(2) : "--"}</strong>
+                    <PhaseMeter 
+                      phase={(deckBAudioRef.current?.currentTime || 0) % (60 / (selectedTrackB?.bpm || 120)) / (60 / (selectedTrackB?.bpm || 120))} 
+                      isMaster={masterDeck === 'B'} 
+                      isSynced={isSyncB} 
+                    />
+                  </div>
                 </div>
                 <div className="deck-stat-box">
                   <span>KEY</span>
@@ -1405,6 +1896,148 @@ export default function App() {
             </div>
           </aside>
 
+          <aside className="copilot-panel">
+            <div className="copilot-header">
+              <div>
+                <span className="mixer-title">AI DJ COPILOT</span>
+                <h2>{transitionCopilot.overall || "--"}%</h2>
+              </div>
+              <span className={`copilot-badge ${transitionCopilot.overall >= 78 ? "success" : transitionCopilot.overall >= 55 ? "warning" : "danger"}`}>
+                {transitionCopilot.overall >= 78 ? "showcase" : transitionCopilot.overall >= 55 ? "workable" : "risky"}
+              </span>
+            </div>
+
+            <div className="score-grid">
+              <div>
+                <span>Tempo</span>
+                <strong>{Math.round(transitionCopilot.tempoScore * 100)}%</strong>
+              </div>
+              <div>
+                <span>Key</span>
+                <strong>{Math.round(transitionCopilot.harmonicScore * 100)}%</strong>
+              </div>
+              <div>
+                <span>Energy</span>
+                <strong>{Math.round(transitionCopilot.energyScore * 100)}%</strong>
+              </div>
+              <div>
+                <span>Phrase</span>
+                <strong>{Math.round(transitionCopilot.phraseScore * 100)}%</strong>
+              </div>
+            </div>
+
+            <section className="copilot-section">
+              <div className="tree-header">SMART MIX POINTS</div>
+              <div className="cue-grid">
+                <div>
+                  <span>Mix out A</span>
+                  <strong>{formatPreciseClock(transitionCopilot.mixOut)}</strong>
+                </div>
+                <div>
+                  <span>Mix in B</span>
+                  <strong>{formatPreciseClock(transitionCopilot.mixIn)}</strong>
+                </div>
+                <div>
+                  <span>Fade</span>
+                  <strong>{transitionCopilot.fadeBars} bars</strong>
+                </div>
+                <div>
+                  <span>Style</span>
+                  <strong>{transitionCopilot.transitionStyle}</strong>
+                </div>
+              </div>
+              <button type="button" className="primary-button" onClick={() => handleApplyCopilotPlan()} disabled={!selectedTrackA || !selectedTrackB}>
+                APPLY CUE PLAN
+              </button>
+            </section>
+
+            <section className="copilot-section">
+              <div className="tree-header">WHY IT WORKS</div>
+              {transitionCopilot.reasons.map((reason) => (
+                <div className="copilot-line" key={reason}>{reason}</div>
+              ))}
+            </section>
+
+            <section className="copilot-section">
+              <div className="tree-header">CLASH RADAR</div>
+              {transitionCopilot.risks.map((risk) => (
+                <div className="copilot-line risk" key={risk}>{risk}</div>
+              ))}
+            </section>
+
+            <section className="copilot-section">
+              <div className="tree-header">CORPUS RADAR</div>
+              <form className="compact-form" onSubmit={handleRecommendationSubmit}>
+                <select
+                  value={recommendationForm.leftSetId}
+                  onChange={(event) => setRecommendationForm((current) => ({ ...current, leftSetId: event.target.value }))}
+                >
+                  {workspace?.availableSetIds.map((setId) => <option key={setId} value={setId}>{setId}</option>)}
+                </select>
+                <select
+                  value={recommendationForm.rightSetId}
+                  onChange={(event) => setRecommendationForm((current) => ({ ...current, rightSetId: event.target.value }))}
+                >
+                  {workspace?.availableSetIds.map((setId) => <option key={setId} value={setId}>{setId}</option>)}
+                </select>
+                <button type="submit" className="secondary-button" disabled={recommendationPending || !recommendationForm.leftSetId || !recommendationForm.rightSetId}>
+                  {recommendationPending ? "SCORING" : "FIND TRANSITIONS"}
+                </button>
+              </form>
+              {recommendationError && <div className="copilot-line danger">{recommendationError}</div>}
+              {recommendationResults.slice(0, 3).map((item) => (
+                <div className="radar-result" key={`${item.leftSetId}-${item.leftSegmentIndex}-${item.rightSetId}-${item.rightSegmentIndex}`}>
+                  <strong>{Math.round(item.probability * 100)}%</strong>
+                  <span>A {formatPreciseClock(item.leftStartSeconds)} to B {formatPreciseClock(item.rightStartSeconds)}</span>
+                </div>
+              ))}
+            </section>
+
+            <section className="copilot-section">
+              <div className="tree-header">SET JOURNEY</div>
+              {setJourney.length === 0 && <div className="copilot-line">Analyze tracks to generate a warmup-to-peak running order.</div>}
+              {setJourney.map((track, index) => (
+                <button
+                  type="button"
+                  className="journey-row"
+                  key={track.id}
+                  onClick={() => {
+                    setSelectedDeckAId(track.id);
+                    const next = setJourney[index + 1] ?? setJourney[index - 1];
+                    if (next) setSelectedDeckBId(next.id);
+                  }}
+                >
+                  <span>{index + 1}</span>
+                  <strong>{track.title}</strong>
+                  <em>{classifyEnergy(track)}</em>
+                </button>
+              ))}
+            </section>
+
+            <section className="copilot-section">
+              <div className="tree-header">DEEP ANALYZER</div>
+              <form className="compact-form" onSubmit={handleAnalyzeMix}>
+                <label className="mini-upload">
+                  A source
+                  <input type="file" accept=".mp3,.wav,.flac,.m4a" onChange={(event) => setAnalysisTrackA(event.target.files?.[0] ?? null)} />
+                </label>
+                <label className="mini-upload">
+                  B source
+                  <input type="file" accept=".mp3,.wav,.flac,.m4a" onChange={(event) => setAnalysisTrackB(event.target.files?.[0] ?? null)} />
+                </label>
+                <button type="submit" className="secondary-button" disabled={analysisPending}>
+                  {analysisPending ? "ANALYZING" : "RUN FILE ANALYSIS"}
+                </button>
+                {analysisResult && (
+                  <button type="button" className="action-btn deck-assign" onClick={() => handleApplyAnalysisPlan()}>
+                    APPLY ANALYSIS
+                  </button>
+                )}
+              </form>
+              {analysisError && <div className="copilot-line danger">{analysisError}</div>}
+            </section>
+          </aside>
+
           <section
             className={`browser-list ${uploadDragOver ? 'upload-drag-over' : ''}`}
             onDragOver={(e) => {
@@ -1441,6 +2074,7 @@ export default function App() {
                 <thead>
                   <tr>
                     <th style={{ width: '30px' }}>#</th>
+                    <th>NAHLAD</th>
                     <th>TRACK TITLE</th>
                     <th>ARTIST</th>
                     <th style={{ width: '60px' }}>BPM</th>
@@ -1461,7 +2095,35 @@ export default function App() {
                       }}
                     >
                       <td>{i + 1}</td>
-                      <td>{track.title}</td>
+                      <td style={{ padding: '4px' }}>
+                        <MiniWaveform 
+                          samples={parseWaveform(track)} 
+                          durationSeconds={track.durationSeconds || 1} 
+                          currentTime={previewTrackId === track.id ? previewCurrentTime : 0}
+                          isPreviewing={previewTrackId === track.id}
+                          onSeek={(time) => {
+                            if (previewTrackId !== track.id) togglePreview(track.id);
+                            handlePreviewSeek(time);
+                          }}
+                          width={140}
+                          height={28}
+                        />
+                      </td>
+                      <td>
+                        <div className="flex-row">
+                          <button 
+                            className={`action-btn ${previewTrackId === track.id && isPreviewing ? 'active pulse' : ''}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              togglePreview(track.id);
+                            }}
+                            title="Preview track"
+                          >
+                            {previewTrackId === track.id && isPreviewing ? "⏹" : "▶"}
+                          </button>
+                          <span>{track.title}</span>
+                        </div>
+                      </td>
                       <td className="small-text">{track.artist || "--"}</td>
                       <td>{track.bpm ? track.bpm.toFixed(1) : "--"}</td>
                       <td>{track.camelotKey || "--"}</td>
@@ -1488,6 +2150,21 @@ export default function App() {
           </section>
         </section>
       </main>
+
+      {/* Hidden Preview Engine */}
+      <audio 
+        ref={previewAudioRef} 
+        src={previewTrackId ? `/api/bff/library/audio/${previewTrackId}` : undefined}
+        autoPlay
+        onPlay={() => setIsPreviewing(true)}
+        onPause={() => setIsPreviewing(false)}
+        onTimeUpdate={() => setPreviewCurrentTime(previewAudioRef.current?.currentTime ?? 0)}
+        onEnded={() => {
+          setIsPreviewing(false);
+          setPreviewTrackId(null);
+          setPreviewCurrentTime(0);
+        }}
+      />
     </div>
   );
 }

@@ -45,11 +45,20 @@ export type TransitionRecommendationRequest = {
   topK: number;
 };
 
+export type RenderQualityResult = {
+  score: number;
+  quality: string;
+  summary: string;
+  feedback: string[];
+  metrics: Record<string, number>;
+};
+
 export type RenderMixRequest = {
   trackAId: string;
   trackBId: string;
   overlayStartSeconds?: number | null;
   rightStartSeconds?: number | null;
+  transitionStyle?: string;
 };
 
 export type MixStudioRequest = {

@@ -42,6 +42,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-ai-overlay-start-seconds", type=int, default=40, help="Latest AI-selected start for track B over track A")
     parser.add_argument("--overlay-start-seconds", type=float, help="Optional manual override for when track B should enter over track A")
     parser.add_argument("--right-start-seconds", type=float, help="Optional manual override for where track B should start in its own source")
+    parser.add_argument("--transition-style", type=str, default="bass_swap", help="Transition style (blend, bass_swap, double_drop, echo_out)")
+
     parser.add_argument(
         "--preserve-track-a-from-start",
         action=argparse.BooleanOptionalAction,
@@ -123,7 +125,7 @@ def main() -> int:
             )
         if args.right_start_seconds is not None:
             transition_plan["right_start_seconds"] = round(max(0.0, float(args.right_start_seconds)), 3)
-            transition_plan["style"] = "manual_blend"
+            transition_plan["style"] = args.transition_style if args.transition_style != "blend" else "manual_blend"
 
         render_mix(
             track_a=track_a,
@@ -374,9 +376,9 @@ def build_transition_plan(
     base_right_start = float(candidate["right_start_seconds"])
 
     style_specs = [
-        {"style": "double_drop", "lead_beats": 16, "tail_beats": 8, "late_exit_bias": 0.25},
-        {"style": "bass_swap", "lead_beats": 32, "tail_beats": 12, "late_exit_bias": 0.12},
-        {"style": "echo_out", "lead_beats": 16, "tail_beats": 8, "late_exit_bias": 0.0},
+        {"style": "double_drop", "lead_beats": 32, "tail_beats": 16, "late_exit_bias": 0.25},
+        {"style": "bass_swap", "lead_beats": 64, "tail_beats": 24, "late_exit_bias": 0.12},
+        {"style": "echo_out", "lead_beats": 32, "tail_beats": 16, "late_exit_bias": 0.0},
     ]
 
     exit_cues = structure_a.get("exit_cues") or [{
@@ -902,69 +904,69 @@ def build_transition_filter_graph(
 
     style_settings = {
         "double_drop": {
-            "a_overlap_volume": 0.84,
-            "a_highpass": 60,
+            "a_overlap_volume": 0.88,
+            "a_highpass": 180, # Aggressive HP to clear space for B's bass
             "a_lowpass": 16000,
-            "a_hold_seconds": beat_window_seconds * 6.0,
-            "a_fade_seconds": max(beat_window_seconds * 10.0, 7.0),
-            "b_intro_highpass": 100,
+            "a_hold_seconds": beat_window_seconds * 12.0,
+            "a_fade_seconds": max(beat_window_seconds * 20.0, 10.0),
+            "b_intro_highpass": 220,
             "b_intro_lowpass": 15000,
-            "b_intro_volume": 0.72,
-            "b_full_volume": 0.9,
-            "b_full_fade": 0.18,
-            "b_bass_boost": 0.12,
+            "b_intro_volume": 0.76,
+            "b_full_volume": 0.95,
+            "b_full_fade": 0.12,
+            "b_bass_boost": 0.15,
         },
         "bass_swap": {
-            "a_overlap_volume": 0.8,
-            "a_highpass": 110,
+            "a_overlap_volume": 0.82,
+            "a_highpass": 240, # Complete bass kill for handoff
             "a_lowpass": 13000,
-            "a_hold_seconds": beat_window_seconds * 8.0,
-            "a_fade_seconds": max(beat_window_seconds * 12.0, 8.0),
-            "b_intro_highpass": 140,
-            "b_intro_lowpass": 12500,
-            "b_intro_volume": 0.68,
-            "b_full_volume": 0.9,
-            "b_full_fade": min(max(track_b_fade_in_seconds * 0.35, 0.5), 3.2),
-            "b_bass_boost": 0.18,
+            "a_hold_seconds": beat_window_seconds * 32.0,
+            "a_fade_seconds": max(beat_window_seconds * 32.0, 15.0),
+            "b_intro_highpass": 280,
+            "b_intro_lowpass": 12000,
+            "b_intro_volume": 0.72,
+            "b_full_volume": 0.94,
+            "b_full_fade": min(max(track_b_fade_in_seconds * 0.4, 0.6), 4.5),
+            "b_bass_boost": 0.22,
         },
         "echo_out": {
-            "a_overlap_volume": 0.74,
-            "a_highpass": 120,
-            "a_lowpass": 9000,
-            "a_hold_seconds": beat_window_seconds * 5.0,
-            "a_fade_seconds": max(beat_window_seconds * 8.0, 5.0),
-            "b_intro_highpass": 120,
+            "a_overlap_volume": 0.76,
+            "a_highpass": 320,
+            "a_lowpass": 8000,
+            "a_hold_seconds": beat_window_seconds * 8.0,
+            "a_fade_seconds": max(beat_window_seconds * 12.0, 6.0),
+            "b_intro_highpass": 200,
             "b_intro_lowpass": 14000,
-            "b_intro_volume": 0.66,
-            "b_full_volume": 0.88,
-            "b_full_fade": min(max(track_b_fade_in_seconds * 0.4, 0.6), 2.8),
-            "b_bass_boost": 0.08,
+            "b_intro_volume": 0.7,
+            "b_full_volume": 0.92,
+            "b_full_fade": min(max(track_b_fade_in_seconds * 0.5, 0.8), 3.5),
+            "b_bass_boost": 0.1,
         },
         "blend": {
             "a_overlap_volume": 0.84,
-            "a_highpass": 80,
+            "a_highpass": 120,
             "a_lowpass": 15000,
-            "a_hold_seconds": beat_window_seconds * 7.0,
-            "a_fade_seconds": max(beat_window_seconds * 10.0, 7.0),
-            "b_intro_highpass": 100,
+            "a_hold_seconds": beat_window_seconds * 16.0,
+            "a_fade_seconds": max(beat_window_seconds * 20.0, 12.0),
+            "b_intro_highpass": 150,
             "b_intro_lowpass": 14500,
-            "b_intro_volume": 0.7,
-            "b_full_volume": 0.9,
-            "b_full_fade": min(max(track_b_fade_in_seconds * 0.4, 0.5), 3.0),
-            "b_bass_boost": 0.1,
+            "b_intro_volume": 0.74,
+            "b_full_volume": 0.92,
+            "b_full_fade": min(max(track_b_fade_in_seconds * 0.5, 0.8), 4.0),
+            "b_bass_boost": 0.12,
         },
         "manual_blend": {
             "a_overlap_volume": 0.86,
-            "a_highpass": 70,
+            "a_highpass": 100,
             "a_lowpass": 16000,
-            "a_hold_seconds": beat_window_seconds * 8.0,
-            "a_fade_seconds": max(beat_window_seconds * 12.0, 8.0),
-            "b_intro_highpass": 90,
+            "a_hold_seconds": beat_window_seconds * 16.0,
+            "a_fade_seconds": max(beat_window_seconds * 24.0, 15.0),
+            "b_intro_highpass": 120,
             "b_intro_lowpass": 15000,
-            "b_intro_volume": 0.74,
-            "b_full_volume": 0.92,
-            "b_full_fade": min(max(track_b_fade_in_seconds * 0.4, 0.5), 3.0),
-            "b_bass_boost": 0.08,
+            "b_intro_volume": 0.78,
+            "b_full_volume": 0.94,
+            "b_full_fade": min(max(track_b_fade_in_seconds * 0.5, 0.8), 4.0),
+            "b_bass_boost": 0.1,
         },
     }
     settings = style_settings.get(transition_style, style_settings["blend"])

@@ -1,7 +1,7 @@
 
-namespace MixerAI.Backend.Models;
+namespace MixerAI.Web.Models;
 
-public sealed class RenderQualityResult
+public sealed class RenderQualityViewModel
 {
     public int Score { get; init; }
     public string Quality { get; init; } = string.Empty;
@@ -10,9 +10,9 @@ public sealed class RenderQualityResult
     public Dictionary<string, double> Metrics { get; init; } = new();
 }
 
-public sealed class MixRenderResult
+public sealed class RenderMixResponseViewModel
 {
     public string FileName { get; init; } = string.Empty;
-    public byte[] Content { get; init; } = Array.Empty<byte>();
-    public RenderQualityResult? Quality { get; set; }
+    public string Base64Audio { get; init; } = string.Empty;
+    public RenderQualityViewModel? Quality { get; init; }
 }

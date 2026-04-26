@@ -2,6 +2,7 @@ import type {
   ApiError,
   MixAnalysisResult,
   RenderMixRequest,
+  RenderQualityResult,
   MixStudioRequest,
   SessionResponse,
   Track,
@@ -9,6 +10,12 @@ import type {
   TransitionRecommendationRequest,
   WorkspaceSnapshot,
 } from "./types";
+
+export type RenderMixResponse = {
+  fileName: string;
+  base64Audio: string;
+  quality: RenderQualityResult | null;
+};
 
 async function readErrorMessage(response: Response): Promise<string> {
   try {
@@ -139,8 +146,8 @@ export const api = {
     }
   },
 
-  renderMix(request: RenderMixRequest): Promise<Blob> {
-    return requestBlob("/api/bff/workspace/render-mix", {
+  renderMix(request: RenderMixRequest): Promise<RenderMixResponse> {
+    return requestJson("/api/bff/workspace/render-mix", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -109,11 +109,12 @@ public sealed class MixerBackendClient : IMixerBackendClient
         return ms.ToArray();
     }
 
-    public async Task<byte[]> RenderMixFromLibraryAsync(
+    public async Task<RenderMixResponseViewModel> RenderMixFromLibraryAsync(
         Guid trackAId,
         Guid trackBId,
         double? overlayStartSeconds,
         double? rightStartSeconds,
+        string? transitionStyle,
         CancellationToken cancellationToken = default)
     {
         var payload = new
@@ -122,6 +123,7 @@ public sealed class MixerBackendClient : IMixerBackendClient
             trackBId,
             overlayStartSeconds,
             rightStartSeconds,
+            transitionStyle,
         };
         using var request = CreateAuthorizedJsonRequest(HttpMethod.Post, "/api/mix/render-from-library", payload);
         using var response = await _httpClient.SendAsync(request, cancellationToken);
@@ -130,7 +132,40 @@ public sealed class MixerBackendClient : IMixerBackendClient
             var error = await response.Content.ReadAsStringAsync(cancellationToken);
             throw new InvalidOperationException(ParseBackendError(error));
         }
-        return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+
+        // The backend now returns a JSON object (MixRenderResult)
+        var result = await response.Content.ReadFromJsonAsync<BackendMixRenderResult>(cancellationToken: cancellationToken);
+        if (result == null) throw new InvalidOperationException("Backend returned empty render result.");
+
+        return new RenderMixResponseViewModel
+        {
+            FileName = result.FileName,
+            Base64Audio = Convert.ToBase64String(result.Content),
+            Quality = result.Quality != null ? new RenderQualityViewModel
+            {
+                Score = result.Quality.Score,
+                Quality = result.Quality.Quality,
+                Summary = result.Quality.Summary,
+                Feedback = result.Quality.Feedback,
+                Metrics = result.Quality.Metrics
+            } : null
+        };
+    }
+
+    private sealed class BackendMixRenderResult
+    {
+        public string FileName { get; set; } = string.Empty;
+        public byte[] Content { get; set; } = Array.Empty<byte>();
+        public BackendQualityResult? Quality { get; set; }
+    }
+
+    private sealed class BackendQualityResult
+    {
+        public int Score { get; set; }
+        public string Quality { get; set; } = string.Empty;
+        public string Summary { get; set; } = string.Empty;
+        public List<string> Feedback { get; set; } = new();
+        public Dictionary<string, double> Metrics { get; set; } = new();
     }
 
     public async Task<IReadOnlyList<string>> GetAvailableSetIdsAsync(CancellationToken cancellationToken = default)

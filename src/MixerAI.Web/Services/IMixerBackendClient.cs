@@ -11,11 +11,12 @@ public interface IMixerBackendClient
     Task<bool> DeleteTrackAsync(Guid trackId, CancellationToken cancellationToken = default);
     Task<bool> RetryTrackAnalysisAsync(Guid trackId, CancellationToken cancellationToken = default);
     Task<(Stream Stream, string ContentType)?> GetTrackAudioStreamAsync(Guid trackId, CancellationToken cancellationToken = default);
-    Task<byte[]> RenderMixFromLibraryAsync(
+    Task<RenderMixResponseViewModel> RenderMixFromLibraryAsync(
         Guid trackAId,
         Guid trackBId,
         double? overlayStartSeconds,
         double? rightStartSeconds,
+        string? transitionStyle,
         CancellationToken cancellationToken = default);
     Task<IReadOnlyList<string>> GetAvailableSetIdsAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TransitionRecommendationViewModel>> RecommendTransitionsAsync(

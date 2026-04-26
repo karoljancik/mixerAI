@@ -171,7 +171,7 @@ apiGroup.MapPost("/mix/render", async (HttpRequest request, AiMixRenderService r
     };
 
     var result = await renderService.RenderAsync(trackA, trackB, options, cancellationToken);
-    return Results.File(result.Content, "audio/mpeg", result.FileName);
+    return Results.Ok(result);
 });
 
 // NEW: Render mix directly from library track IDs (no re-upload needed)
@@ -209,9 +209,10 @@ apiGroup.MapPost("/mix/render-from-library", async (
         {
             OverlayStartSeconds = request.OverlayStartSeconds,
             RightStartSeconds = request.RightStartSeconds,
+            TransitionStyle = request.TransitionStyle,
         },
         cancellationToken);
-    return Results.File(result.Content, "audio/mpeg", result.FileName);
+    return Results.Ok(result);
 });
 
 
@@ -269,7 +270,8 @@ public record RenderFromLibraryRequest(
     Guid TrackAId,
     Guid TrackBId,
     double? OverlayStartSeconds,
-    double? RightStartSeconds);
+    double? RightStartSeconds,
+    string? TransitionStyle);
 
 // Adapter: wraps a physical file on disk as IFormFile for AiMixRenderService
 public sealed class PhysicalFileFormFile : IFormFile

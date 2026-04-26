@@ -88,11 +88,53 @@ public sealed class AiMixRenderService
             throw new InvalidOperationException("AI mix render did not produce an MP3 output.");
         }
 
+        var qualityResult = await VerifyQualityAsync(outputPath, cancellationToken);
+
         return new MixRenderResult
         {
             FileName = $"mixerai-mix-{renderId}.mp3",
             Content = await File.ReadAllBytesAsync(outputPath, cancellationToken),
+            Quality = qualityResult
         };
+    }
+
+    private async Task<RenderQualityResult?> VerifyQualityAsync(string mixPath, CancellationToken cancellationToken)
+    {
+        var processStartInfo = new ProcessStartInfo
+        {
+            FileName = _pythonExecutable,
+            WorkingDirectory = _repoRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        processStartInfo.ArgumentList.Add("ai/verify_mix_quality.py");
+        processStartInfo.ArgumentList.Add("--mix-path");
+        processStartInfo.ArgumentList.Add(mixPath);
+
+        try
+        {
+            using var process = Process.Start(processStartInfo);
+            if (process == null) return null;
+
+            await process.WaitForExitAsync(cancellationToken);
+            var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+            
+            if (process.ExitCode == 0)
+            {
+                return JsonSerializer.Deserialize<RenderQualityResult>(
+                    output, 
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+        }
+        catch
+        {
+            // Silently fail verification if Python or Librosa fails, we still want to return the mix
+        }
+
+        return null;
     }
 
 
@@ -239,6 +281,12 @@ public sealed class AiMixRenderService
         {
             processStartInfo.ArgumentList.Add("--right-start-seconds");
             processStartInfo.ArgumentList.Add(rightStartSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        if (!string.IsNullOrWhiteSpace(options?.TransitionStyle))
+        {
+            processStartInfo.ArgumentList.Add("--transition-style");
+            processStartInfo.ArgumentList.Add(options.TransitionStyle);
         }
     }
 }

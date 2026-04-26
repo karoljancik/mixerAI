@@ -77,7 +77,12 @@ internal sealed class FakeMixerBackendClient : IMixerBackendClient
         return Task.FromResult< (Stream Stream, string ContentType)? >((new MemoryStream([1, 2, 3]), "audio/mpeg"));
     }
 
-    public Task<byte[]> RenderMixFromLibraryAsync(Guid trackAId, Guid trackBId, CancellationToken cancellationToken = default)
+    public Task<byte[]> RenderMixFromLibraryAsync(
+        Guid trackAId,
+        Guid trackBId,
+        double? overlayStartSeconds,
+        double? rightStartSeconds,
+        CancellationToken cancellationToken = default)
         => Task.FromResult(RenderedMix);
 
     public Task<IReadOnlyList<string>> GetAvailableSetIdsAsync(CancellationToken cancellationToken = default)
