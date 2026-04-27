@@ -1,10 +1,18 @@
+import os
+import sys
+
+# Crucial Docker/Windows stability fixes for ML libraries
+pid = os.getpid()
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["NUMBA_CACHE_DIR"] = f"/tmp/numba_init_{pid}"
+
 import warnings
 warnings.filterwarnings("ignore")
 
 import argparse
 import json
-import sys
-
 import librosa
 import numpy as np
 
@@ -65,7 +73,7 @@ def normalize_series(values: np.ndarray, low_percentile: float, high_percentile:
 
 
 def extract_multiband_waveform(y: np.ndarray, sr: int, num_points: int = 1200) -> dict[str, object]:
-    n_fft = 2048
+    n_fft = 1024
     hop_length = 512
 
     mel = librosa.feature.melspectrogram(
@@ -75,13 +83,13 @@ def extract_multiband_waveform(y: np.ndarray, sr: int, num_points: int = 1200) -
         hop_length=hop_length,
         n_mels=96,
         fmin=30,
-        fmax=16000,
+        fmax=sr // 2,
         power=2.0,
     )
     mel = np.maximum(mel, 1e-10)
     mel_db = librosa.power_to_db(mel, ref=np.max)
     mel_energy = np.maximum(mel_db + 80.0, 0.0)
-    frequencies = librosa.mel_frequencies(n_mels=mel.shape[0], fmin=30, fmax=16000)
+    frequencies = librosa.mel_frequencies(n_mels=mel.shape[0], fmin=30, fmax=sr // 2)
 
     low_mask = frequencies < 180
     mid_mask = np.logical_and(frequencies >= 180, frequencies < 2200)
@@ -98,8 +106,9 @@ def extract_multiband_waveform(y: np.ndarray, sr: int, num_points: int = 1200) -
     mid_frames = band_profile(mid_mask, 90)
     high_frames = band_profile(high_mask, 87)
     energy_frames = np.percentile(mel_energy, 92, axis=0).astype(np.float32)
-    transient_frames = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length).astype(np.float32)
-
+    
+    # Use existing mel spectrogram to compute onset strength to save memory
+    transient_frames = librosa.onset.onset_strength(S=mel_db, sr=sr, hop_length=hop_length).astype(np.float32)
     low = normalize_series(aggregate_series(low_frames, num_points, 95), 10, 99.6, 0.9)
     mid = normalize_series(aggregate_series(mid_frames, num_points, 93), 10, 99.4, 0.92)
     high = normalize_series(aggregate_series(high_frames, num_points, 90), 8, 99.2, 0.95)
@@ -150,27 +159,33 @@ def get_key_from_chroma(chroma: np.ndarray) -> tuple[str, str]:
 
 
 def analyze_track(file_path: str, output_json: str) -> None:
-    print(f"Analyzing {file_path}...")
+    import os
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Source file not found at: {file_path}")
 
-    # Load with higher SR for better transient resolution
-    y, sr = librosa.load(file_path, sr=22050, mono=True)
+    # Load with lower SR to save memory and prevent segfaults
+    # 11025 Hz is enough for BPM and Key detection (up to 5.5 kHz)
+    try:
+        y, sr = librosa.load(file_path, sr=11025, mono=True)
+    except Exception as e:
+        raise RuntimeError(f"Librosa failed to load audio file: {str(e)}")
+
     duration = librosa.get_duration(y=y, sr=sr)
-
-    # Robust BPM and Beat Track Detection
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-    tempo_val, beat_frames = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
-    tempo_float = float(tempo_val)
     
-    # Key Detection
-    chroma = librosa.feature.chroma_cqt(y=y, sr=sr, bins_per_octave=24)
+    # Robust BPM and Beat Track Detection
+    tempo_val, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+    # Ensure tempo is a float (handling both scalar and array returns)
+    tempo_float = float(tempo_val[0]) if hasattr(tempo_val, "__len__") else float(tempo_val)
+    
+    # Stable Key Detection
+    chroma = librosa.feature.chroma_stft(y=y, sr=sr)
     key_name, camelot = get_key_from_chroma(chroma)
 
     # Precision Beat Alignment
-    # Detecting the first major beat to align the grid properly
-    _, beat_frames = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
     beat_offset = float(beat_times[0]) if len(beat_times) > 0 else 0.0
 
+    # Waveform Summary
     waveform = extract_multiband_waveform(y, sr)
 
     result = {

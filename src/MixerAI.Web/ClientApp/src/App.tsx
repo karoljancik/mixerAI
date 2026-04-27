@@ -157,7 +157,12 @@ const TrackRow = React.memo(({
       <td>{track.bpm ? track.bpm.toFixed(1) : "--"}</td>
       <td>{track.camelotKey || "--"}</td>
       <td>{formatDuration(track.durationSeconds)}</td>
-      <td className="status-cell">{track.status}</td>
+      <td className="status-cell" title={track.lastAnalysisError || undefined}>
+        <span style={{ color: track.status.toLowerCase() === "error" ? "var(--danger)" : "inherit" }}>
+          {track.status}
+          {track.status.toLowerCase() === "error" && " ⚠️"}
+        </span>
+      </td>
       <td>
         <div className="flex-row">
           <button className="action-btn deck-assign" disabled={track.status.toLowerCase() !== "ready"} onClick={() => setSelectedDeckAId(track.id)}>1</button>
@@ -1053,7 +1058,7 @@ export default function App() {
 
     const interval = window.setInterval(() => {
       void refreshWorkspace(false);
-    }, 7000);
+    }, 3000);
 
     return () => window.clearInterval(interval);
   }, [session?.isAuthenticated, workspace]);

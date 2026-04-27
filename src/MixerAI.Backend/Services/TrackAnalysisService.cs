@@ -96,13 +96,12 @@ public class TrackAnalysisService
             await process.WaitForExitAsync(cancellationToken);
             if (process.ExitCode != 0)
             {
-                var processError = await process.StandardError.ReadToEndAsync(cancellationToken);
-                if (string.IsNullOrWhiteSpace(processError))
-                {
-                    processError = await process.StandardOutput.ReadToEndAsync(cancellationToken);
-                }
-
-                throw new InvalidOperationException($"Track analysis failed: {SummarizeError(processError)}");
+                var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+                var stderr = await process.StandardError.ReadToEndAsync(cancellationToken);
+                var combined = $"ExitCode: {process.ExitCode}. Stderr: {stderr}. Stdout: {stdout}";
+                
+                _logger.LogError("Track analysis process failed for {TrackId}. {Error}", trackId, combined);
+                throw new InvalidOperationException($"Track analysis failed (Code {process.ExitCode}): {SummarizeError(combined)}");
             }
 
             if (!File.Exists(tempOutput))
