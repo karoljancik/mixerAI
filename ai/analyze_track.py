@@ -1,9 +1,13 @@
+import warnings
+warnings.filterwarnings("ignore")
+
 import argparse
 import json
 import sys
 
 import librosa
 import numpy as np
+
 
 # Mapping from Musical Key to Camelot Wheel Code
 # 1A = Ab Minor, 1B = B Major, etc.
@@ -114,26 +118,64 @@ def extract_multiband_waveform(y: np.ndarray, sr: int, num_points: int = 1200) -
     }
 
 
+def get_key_from_chroma(chroma: np.ndarray) -> tuple[str, str]:
+    # Krumhansl-Schmuckler Key Profiles
+    major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+    minor_profile = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+
+    notes = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+    chroma_mean = np.mean(chroma, axis=1)
+
+    best_key = ""
+    best_score = -1.0
+    is_minor = False
+
+    for i in range(12):
+        # Rotate profiles to match current root
+        corr_major = np.corrcoef(chroma_mean, np.roll(major_profile, i))[0, 1]
+        corr_minor = np.corrcoef(chroma_mean, np.roll(minor_profile, i))[0, 1]
+
+        if corr_major > best_score:
+            best_score = corr_major
+            best_key = notes[i]
+            is_minor = False
+        if corr_minor > best_score:
+            best_score = corr_minor
+            best_key = notes[i]
+            is_minor = True
+
+    key_name = f"{best_key} {'minor' if is_minor else 'major'}"
+    camelot = KEY_TO_CAMELOT.get(key_name, "Unknown")
+    return key_name, camelot
+
+
 def analyze_track(file_path: str, output_json: str) -> None:
     print(f"Analyzing {file_path}...")
 
+    # Load with higher SR for better transient resolution
     y, sr = librosa.load(file_path, sr=22050, mono=True)
     duration = librosa.get_duration(y=y, sr=sr)
 
-    tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-    bpm = float(tempo[0]) if isinstance(tempo, np.ndarray) else float(tempo)
+    # Robust BPM and Beat Track Detection
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+    tempo_val, beat_frames = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
+    tempo_float = float(tempo_val)
+    
+    # Key Detection
+    chroma = librosa.feature.chroma_cqt(y=y, sr=sr, bins_per_octave=24)
+    key_name, camelot = get_key_from_chroma(chroma)
 
-    chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
-    key_idx = int(np.argmax(np.mean(chroma, axis=1)))
-    notes = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
-    is_minor = bool(np.mean(chroma[3]) > np.mean(chroma[4]))
-    key_name = f"{notes[key_idx]} {'minor' if is_minor else 'major'}"
-    camelot = KEY_TO_CAMELOT.get(key_name, "Unknown")
+    # Precision Beat Alignment
+    # Detecting the first major beat to align the grid properly
+    _, beat_frames = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+    beat_offset = float(beat_times[0]) if len(beat_times) > 0 else 0.0
 
     waveform = extract_multiband_waveform(y, sr)
 
     result = {
-        "bpm": round(bpm, 2),
+        "bpm": round(tempo_float, 2),
+        "beat_offset": round(beat_offset, 3),
         "key": key_name,
         "camelot": camelot,
         "duration": round(duration, 2),

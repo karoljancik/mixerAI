@@ -1,44 +1,27 @@
+import React, { useEffect, useRef, useMemo } from "react";
 import type { PointerEventHandler, RefObject } from "react";
-import { useEffect, useRef } from "react";
 import type { BeatMarker, WaveformBands } from "../types";
 
 const ZOOM_PX_PER_SEC = 112;
-const BAR_WIDTH_PX = 2;
-const BAR_GAP_PX = 1;
-const WAVEFORM_VERTICAL_PADDING = 4;
-const GRID_BAND_HEIGHT = 10;
 
 function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
 }
 
 function getPercentile(values: number[], percentile: number): number {
-  if (values.length === 0) {
-    return 0;
-  }
-
-  const sorted = [...values].sort((left, right) => left - right);
-  const position = clamp01(percentile) * (sorted.length - 1);
-  const lowerIndex = Math.floor(position);
-  const upperIndex = Math.ceil(position);
-  const blend = position - lowerIndex;
-
-  return (sorted[lowerIndex] ?? 0) * (1 - blend) + (sorted[upperIndex] ?? 0) * blend;
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const pos = clamp01(percentile) * (sorted.length - 1);
+  const lower = Math.floor(pos);
+  const upper = Math.ceil(pos);
+  const blend = pos - lower;
+  return (sorted[lower] ?? 0) * (1 - blend) + (sorted[upper] ?? 0) * blend;
 }
 
-
 function getSampleAtTime(samples: number[], timeSeconds: number, durationSeconds: number): number {
-  if (samples.length === 0 || durationSeconds <= 0) {
-    return 0;
-  }
-
-  if (timeSeconds <= 0) {
-    return clamp01(samples[0] ?? 0);
-  }
-
-  if (timeSeconds >= durationSeconds) {
-    return clamp01(samples[samples.length - 1] ?? 0);
-  }
+  if (samples.length === 0 || durationSeconds <= 0) return 0;
+  if (timeSeconds <= 0) return clamp01(samples[0] ?? 0);
+  if (timeSeconds >= durationSeconds) return clamp01(samples[samples.length - 1] ?? 0);
 
   const exactIndex = (timeSeconds / durationSeconds) * (samples.length - 1);
   const baseIndex = Math.floor(exactIndex);
@@ -51,43 +34,42 @@ function getSampleAtTime(samples: number[], timeSeconds: number, durationSeconds
 
   const near = current * (1 - blend) + next * blend;
   const wide = left * 0.18 + current * 0.32 + next * 0.32 + right * 0.18;
-
   return clamp01(near * 0.7 + wide * 0.3);
 }
 
-function drawMirroredBar(
-  context: CanvasRenderingContext2D,
-  x: number,
-  centerY: number,
-  width: number,
-  amplitude: number,
-  color: string,
-) {
-  const safeAmplitude = Math.max(1, amplitude);
-  context.fillStyle = color;
-  context.fillRect(x, centerY - safeAmplitude, width, safeAmplitude - 1);
-  context.fillRect(x, centerY + 1, width, safeAmplitude - 1);
-}
+function drawBeatMarker(context: CanvasRenderingContext2D, x: number, height: number, isBar: boolean) {
+  const markerColor = isBar ? "#ff2222" : "rgba(255, 255, 255, 0.55)";
+  const lineWidth = isBar ? 1.5 : 1.1;
 
-function drawBeatMarker(
-  context: CanvasRenderingContext2D,
-  x: number,
-  height: number,
-  isBar: boolean,
-) {
-  const topBandHeight = isBar ? GRID_BAND_HEIGHT : GRID_BAND_HEIGHT - 3;
-  const bottomBandY = height - topBandHeight;
-
-  context.strokeStyle = isBar ? "rgba(255, 108, 108, 0.95)" : "rgba(225, 236, 255, 0.42)";
-  context.lineWidth = isBar ? 2.6 : 1.15;
+  // Vertical line
+  context.strokeStyle = markerColor;
+  context.lineWidth = lineWidth;
   context.beginPath();
   context.moveTo(x + 0.5, 0);
   context.lineTo(x + 0.5, height);
   context.stroke();
 
-  context.fillStyle = isBar ? "rgba(255, 96, 96, 0.92)" : "rgba(210, 224, 255, 0.6)";
-  context.fillRect(x - (isBar ? 1 : 0), 0, isBar ? 3 : 1, topBandHeight);
-  context.fillRect(x - (isBar ? 1 : 0), bottomBandY, isBar ? 3 : 1, topBandHeight);
+  if (isBar) {
+    // Red Triangles at top and bottom (Compact Rekordbox style)
+    const triSize = 4;
+    context.fillStyle = "#ff2222";
+    
+    // Top triangle
+    context.beginPath();
+    context.moveTo(x - triSize, 0);
+    context.lineTo(x + triSize, 0);
+    context.lineTo(x, triSize * 1.5);
+    context.closePath();
+    context.fill();
+
+    // Bottom triangle
+    context.beginPath();
+    context.moveTo(x - triSize, height);
+    context.lineTo(x + triSize, height);
+    context.lineTo(x, height - triSize * 1.5);
+    context.closePath();
+    context.fill();
+  }
 }
 
 type WaveformCanvasProps = {
@@ -101,7 +83,7 @@ type WaveformCanvasProps = {
   onPointerDown?: PointerEventHandler<HTMLCanvasElement>;
 };
 
-export function WaveformCanvas({
+export const WaveformCanvas = React.memo(({
   samples,
   accent = "#f1c40f",
   background = "#000",
@@ -110,19 +92,135 @@ export function WaveformCanvas({
   audioRef,
   className,
   onPointerDown,
-}: WaveformCanvasProps) {
+}: WaveformCanvasProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const bounds = useMemo(() => {
+    if (samples.energy.length === 0) return { low: 0, high: 1 };
+    return {
+      low: getPercentile(samples.energy, 0.08),
+      high: getPercentile(samples.energy, 0.992),
+    };
+  }, [samples.energy]);
+
+  const offscreenRef = useRef<HTMLCanvasElement[]>([]);
+  const CACHE_PX_PER_SEC = 56; // Half res cache for huge memory savings and speed
+
+  useEffect(() => {
+    if (!samples.energy.length || !durationSeconds) return;
+
+    const totalWidth = durationSeconds * CACHE_PX_PER_SEC;
+    const height = 160; 
+    const MAX_TILE_WIDTH = 8000;
+    const numTiles = Math.ceil(totalWidth / MAX_TILE_WIDTH);
+    const tiles: HTMLCanvasElement[] = [];
+
+    // Removed unused global variables as they are redefined per tile in the loop
+
+    for (let t = 0; t < numTiles; t++) {
+      const tileCanvas = document.createElement("canvas");
+      tileCanvas.width = Math.min(MAX_TILE_WIDTH, totalWidth - t * MAX_TILE_WIDTH);
+      tileCanvas.height = height;
+      const tCtx = tileCanvas.getContext("2d");
+      if (!tCtx) continue;
+
+      const tileStartSec = (t * MAX_TILE_WIDTH) / CACHE_PX_PER_SEC;
+      const halfWaveHeight = height * 0.45;
+      const center = height / 2;
+
+      const layers = [
+        { 
+          // LAYER 1: SOLID BLUE (OVERALL ENVELOPE / BASS)
+          // Rekordbox uses a high-res (fuzzy) edge for the blue envelope.
+          color: "rgba(0, 71, 255, 1.0)", 
+          getAmp: (l: number, m: number, h: number) => Math.max(l, m, h) * halfWaveHeight,
+          smooth: 0 // No smoothing for that high-res/noisy look at the edges
+        },
+        { 
+          // LAYER 2: SOLID AMBER (MIDS)
+          color: "rgba(212, 137, 0, 1.0)",
+          getAmp: (_l: number, m: number) => m * halfWaveHeight * 0.78,
+          smooth: 3 // Smooth transitions for mids
+        },
+        { 
+          // LAYER 3: PURE WHITE (HIGHS/TRANSIENTS)
+          color: "rgba(250, 249, 246, 1.0)", 
+          getAmp: (_l: number, _m: number, h: number, e: number, tr: number) => {
+             const normE = clamp01((e - bounds.low) / Math.max(0.001, bounds.high - bounds.low));
+             return (h * 0.45 + tr * 0.45 + normE * 0.1) * halfWaveHeight * 0.45;
+          },
+          smooth: 1 // Sharp but not aliased
+        }
+      ];
+
+      layers.forEach(layer => {
+        tCtx.beginPath();
+        tCtx.fillStyle = layer.color;
+        tCtx.lineJoin = "miter"; // Sharper spikes
+        tCtx.lineCap = "butt";
+        
+        const smoothWindow = layer.smooth; 
+
+        for (let x = 0; x < tileCanvas.width; x++) {
+          let avgAmp = 0;
+          let count = 0;
+          for (let sw = -smoothWindow; sw <= smoothWindow; sw++) {
+            const time = tileStartSec + ((x + sw) / CACHE_PX_PER_SEC);
+            if (time < 0 || time > durationSeconds) continue;
+            
+            const low = getSampleAtTime(samples.low, time, durationSeconds);
+            const mid = getSampleAtTime(samples.mid, time, durationSeconds);
+            const high = getSampleAtTime(samples.high, time, durationSeconds);
+            const energy = getSampleAtTime(samples.energy, time, durationSeconds);
+            const prevE = getSampleAtTime(samples.energy, time - 0.05, durationSeconds);
+            const nextE = getSampleAtTime(samples.energy, time + 0.05, durationSeconds);
+            const transient = clamp01((energy - ((prevE + nextE) * 0.5)) * 4.8 + 0.1);
+
+            avgAmp += (layer as any).getAmp(low, mid, high, energy, transient);
+            count++;
+          }
+          const amp = avgAmp / (count || 1);
+          if (x === 0) tCtx.moveTo(x, center - amp);
+          else tCtx.lineTo(x, center - amp);
+        }
+        
+        for (let x = tileCanvas.width - 1; x >= 0; x--) {
+          let avgAmp = 0;
+          let count = 0;
+          const windowSize = smoothWindow;
+          for (let sw = -windowSize; sw <= windowSize; sw++) {
+            const time = tileStartSec + ((x + sw) / CACHE_PX_PER_SEC);
+            if (time < 0 || time > durationSeconds) continue;
+
+            const low = getSampleAtTime(samples.low, time, durationSeconds);
+            const mid = getSampleAtTime(samples.mid, time, durationSeconds);
+            const high = getSampleAtTime(samples.high, time, durationSeconds);
+            const energy = getSampleAtTime(samples.energy, time, durationSeconds);
+            const prevE = getSampleAtTime(samples.energy, time - 0.05, durationSeconds);
+            const nextE = getSampleAtTime(samples.energy, time + 0.05, durationSeconds);
+            const transient = clamp01((energy - ((prevE + nextE) * 0.5)) * 4.8 + 0.1);
+            avgAmp += (layer as any).getAmp(low, mid, high, energy, transient);
+            count++;
+          }
+          const amp = avgAmp / (count || 1);
+          tCtx.lineTo(x, center + amp);
+        }
+        
+        tCtx.closePath();
+        tCtx.fill();
+      });
+
+      tiles.push(tileCanvas);
+    }
+
+    offscreenRef.current = tiles;
+  }, [samples, bounds, durationSeconds]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-
+    if (!canvas) return;
     const context = canvas.getContext("2d");
-    if (!context) {
-      return;
-    }
+    if (!context) return;
 
     let animFrame = 0;
 
@@ -131,12 +229,8 @@ export function WaveformCanvas({
       const height = Math.max(1, canvas.clientHeight);
       const ratio = window.devicePixelRatio || 1;
 
-      if (canvas.width !== Math.floor(width * ratio)) {
-        canvas.width = Math.floor(width * ratio);
-      }
-      if (canvas.height !== Math.floor(height * ratio)) {
-        canvas.height = Math.floor(height * ratio);
-      }
+      if (canvas.width !== Math.floor(width * ratio)) canvas.width = Math.floor(width * ratio);
+      if (canvas.height !== Math.floor(height * ratio)) canvas.height = Math.floor(height * ratio);
 
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.clearRect(0, 0, width, height);
@@ -144,106 +238,49 @@ export function WaveformCanvas({
       context.fillRect(0, 0, width, height);
 
       const currentTime = audioRef?.current?.currentTime || 0;
-      const center = height / 2;
-      const halfWaveHeight = Math.max(6, center - WAVEFORM_VERTICAL_PADDING);
 
-      if (samples.energy.length > 0 && durationSeconds && durationSeconds > 0) {
-        const step = BAR_WIDTH_PX + BAR_GAP_PX;
+      const tiles = offscreenRef.current;
+      if (tiles.length > 0 && durationSeconds && durationSeconds > 0) {
         const visibleSeconds = width / ZOOM_PX_PER_SEC;
-        const sampleWindowSeconds = visibleSeconds / Math.max(1, width / step);
-        const bars: Array<{ x: number; low: number; mid: number; high: number; energy: number; transient: number }> = [];
+        const startTime = currentTime - visibleSeconds / 2;
+        
+        // Draw cached tiles
+        const scaleX = ZOOM_PX_PER_SEC / CACHE_PX_PER_SEC;
+        
+        tiles.forEach((tile, i) => {
+          const tileStartSec = (i * 8000) / CACHE_PX_PER_SEC;
+          const tileEndSec = tileStartSec + tile.width / CACHE_PX_PER_SEC;
+          
+          if (tileEndSec < startTime || tileStartSec > startTime + visibleSeconds) return;
 
-        for (let xPos = 0; xPos <= width; xPos += step) {
-          const timeAtX = currentTime + (xPos - width / 2) / ZOOM_PX_PER_SEC;
-
-          if (timeAtX < 0 || (durationSeconds && timeAtX > durationSeconds)) {
-            continue;
-          }
-
-          const previousEnergy = getSampleAtTime(samples.energy, timeAtX - sampleWindowSeconds, durationSeconds);
-          const currentEnergy = getSampleAtTime(samples.energy, timeAtX, durationSeconds);
-          const nextEnergy = getSampleAtTime(samples.energy, timeAtX + sampleWindowSeconds, durationSeconds);
-
-          bars.push({
-            x: xPos,
-            low: getSampleAtTime(samples.low, timeAtX, durationSeconds),
-            mid: getSampleAtTime(samples.mid, timeAtX, durationSeconds),
-            high: getSampleAtTime(samples.high, timeAtX, durationSeconds),
-            energy: clamp01((previousEnergy * 0.24) + (currentEnergy * 0.52) + (nextEnergy * 0.24)),
-            transient: clamp01((currentEnergy - ((previousEnergy + nextEnergy) * 0.5)) * 4.8 + 0.1),
-          });
-        }
-
-        const energyValues = bars.map((bar) => bar.energy);
-        const lowPercentile = getPercentile(energyValues, 0.08);
-        const highPercentile = getPercentile(energyValues, 0.992);
-        const visibleRange = Math.max(0.0001, highPercentile - lowPercentile);
-        const neighborhoodRadius = 3;
-
-        bars.forEach((bar, index) => {
-          let neighborhoodTotal = 0;
-          let neighborhoodCount = 0;
-
-          for (let offset = -neighborhoodRadius; offset <= neighborhoodRadius; offset += 1) {
-            const neighbor = bars[index + offset];
-            if (!neighbor) {
-              continue;
-            }
-
-            neighborhoodTotal += neighbor.energy;
-            neighborhoodCount += 1;
-          }
-
-          const neighborhoodAverage = neighborhoodCount > 0 ? neighborhoodTotal / neighborhoodCount : bar.energy;
-          const normalizedEnergy = clamp01((bar.energy - lowPercentile) / visibleRange);
-          const contrastBoost = clamp01((bar.energy - neighborhoodAverage) * 6.2 + 0.42);
-          const shapedEnergy = Math.pow(normalizedEnergy, 1.42);
-          const combinedEnergy = clamp01((shapedEnergy * 0.8) + (contrastBoost * 0.22) + (bar.transient * 0.14));
-          const r = clamp01((bar.low * 1.1) + (bar.transient * 0.2)) * 255;
-          const g = clamp01((bar.mid * 1.1) + (bar.transient * 0.2)) * 255;
-          const b = clamp01((bar.high * 1.2) + 0.1 + (bar.transient * 0.3)) * 255;
-
-          const air = clamp01((bar.high * 0.8) + (bar.transient * 0.35));
-
-          const outerAmplitude = Math.max(1, halfWaveHeight * (0.08 + combinedEnergy * 0.54));
-          const warmAmplitude = Math.max(1, outerAmplitude * (0.4 + bar.low * 0.4));
-          const midAmplitude = Math.max(1, outerAmplitude * (0.2 + bar.mid * 0.5));
-          const airAmplitude = Math.max(1, outerAmplitude * (0.1 + air * 0.3));
-          const coreAmplitude = Math.max(1, outerAmplitude * (0.04 + bar.transient * 0.14 + bar.high * 0.06));
-
-          const bodyColor = `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, 0.85)`;
-          const accentColor = `rgba(${Math.round(Math.min(255, r + 50))}, ${Math.round(Math.min(255, g + 50))}, ${Math.round(Math.min(255, b + 50))}, 0.95)`;
-
-          drawMirroredBar(context, bar.x, center, BAR_WIDTH_PX, outerAmplitude, `rgba(${Math.round(r * 0.5)}, ${Math.round(g * 0.5)}, ${Math.round(b * 0.8)}, 0.6)`);
-          drawMirroredBar(context, bar.x, center, BAR_WIDTH_PX, warmAmplitude, `rgba(${Math.round(r)}, ${Math.round(g * 0.3)}, ${Math.round(b * 0.3)}, 0.8)`);
-          drawMirroredBar(context, bar.x, center, BAR_WIDTH_PX, midAmplitude, bodyColor);
-          drawMirroredBar(context, bar.x, center, 1, Math.max(airAmplitude, coreAmplitude), accentColor);
-          drawMirroredBar(context, bar.x, center, 1, coreAmplitude, "rgba(255, 255, 255, 0.94)");
+          const xOffset = (tileStartSec - startTime) * ZOOM_PX_PER_SEC;
+          context.drawImage(
+            tile,
+            0, 0, tile.width, tile.height,
+            xOffset, 0, tile.width * scaleX, height
+          );
         });
 
-        context.strokeStyle = "rgba(255, 255, 255, 0.18)";
+        // Professional Grid
+        context.strokeStyle = "rgba(255, 255, 255, 0.03)";
         context.lineWidth = 1;
-        context.beginPath();
-        context.moveTo(0, center);
-        context.lineTo(width, center);
-        context.stroke();
-
-        const visibleTimeStart = currentTime - (width / 2) / ZOOM_PX_PER_SEC;
-        const visibleTimeEnd = currentTime + (width / 2) / ZOOM_PX_PER_SEC;
+        [0.25, 0.5, 0.75].forEach(pct => {
+          const y = height * pct;
+          context.beginPath();
+          context.moveTo(0, y);
+          context.lineTo(width, y);
+          context.stroke();
+        });
 
         if (beatMarkers.length > 0) {
-          context.fillStyle = "rgba(255, 255, 255, 0.04)";
-          context.fillRect(0, 0, width, GRID_BAND_HEIGHT);
-          context.fillRect(0, height - GRID_BAND_HEIGHT, width, GRID_BAND_HEIGHT);
-
-          for (let index = 0; index < beatMarkers.length; index += 1) {
-            const marker = beatMarkers[index];
-            if (marker.timelineSeconds < visibleTimeStart || marker.timelineSeconds > visibleTimeEnd) {
-              continue;
-            }
-
-            const x = Math.round((width / 2) + ((marker.timelineSeconds - currentTime) * ZOOM_PX_PER_SEC));
-            drawBeatMarker(context, x, height, marker.isBar);
+          const visibleTimeStart = currentTime - (width / 2) / ZOOM_PX_PER_SEC;
+          const visibleTimeEnd = currentTime + (width / 2) / ZOOM_PX_PER_SEC;
+          
+          for (let i = 0; i < beatMarkers.length; i++) {
+            const m = beatMarkers[i];
+            if (m.timelineSeconds < visibleTimeStart || m.timelineSeconds > visibleTimeEnd) continue;
+            const x = Math.round((width / 2) + ((m.timelineSeconds - currentTime) * ZOOM_PX_PER_SEC));
+            drawBeatMarker(context, x, height, m.isBar);
           }
         }
       }
@@ -266,11 +303,9 @@ export function WaveformCanvas({
     };
 
     redraw();
+    return () => cancelAnimationFrame(animFrame);
+  }, [accent, audioRef, background, beatMarkers, durationSeconds, bounds]);
 
-    return () => {
-      cancelAnimationFrame(animFrame);
-    };
-  }, [accent, audioRef, background, beatMarkers, durationSeconds, samples]);
 
   return <canvas ref={canvasRef} className={className} style={{ cursor: "ew-resize" }} onPointerDown={onPointerDown} />;
-}
+});

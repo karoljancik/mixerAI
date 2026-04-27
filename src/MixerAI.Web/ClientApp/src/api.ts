@@ -135,8 +135,30 @@ export const api = {
     }
   },
 
+  async clearLibrary(): Promise<void> {
+    const response = await fetch("/api/bff/library/clear", {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response));
+    }
+  },
+
   async retryTrackAnalysis(id: string): Promise<void> {
     const response = await fetch(`/api/bff/library/${id}/retry-analysis`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response));
+    }
+  },
+
+  async retryLibraryTracks(): Promise<void> {
+    const response = await fetch("/api/bff/library/retry-all", {
       method: "POST",
       credentials: "same-origin",
     });

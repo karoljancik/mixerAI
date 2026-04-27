@@ -81,9 +81,23 @@ public sealed class MixerBackendClient : IMixerBackendClient
         return response.IsSuccessStatusCode;
     }
 
+    public async Task<bool> ClearLibraryAsync(CancellationToken cancellationToken = default)
+    {
+        using var request = CreateAuthorizedRequest(HttpMethod.Delete, "/api/tracks");
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        return response.IsSuccessStatusCode;
+    }
+
     public async Task<bool> RetryTrackAnalysisAsync(Guid trackId, CancellationToken cancellationToken = default)
     {
         using var request = CreateAuthorizedRequest(HttpMethod.Post, $"/api/tracks/{trackId}/retry-analysis");
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        return response.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> RetryAllLibraryTracksAsync(CancellationToken cancellationToken = default)
+    {
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, "/api/tracks/retry-all");
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         return response.IsSuccessStatusCode;
     }

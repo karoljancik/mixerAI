@@ -9,7 +9,9 @@ public interface IMixerBackendClient
     Task<List<TrackViewModel>> GetTracksAsync(CancellationToken cancellationToken = default);
     Task<TrackViewModel> UploadTrackAsync(IFormFile file, CancellationToken cancellationToken = default);
     Task<bool> DeleteTrackAsync(Guid trackId, CancellationToken cancellationToken = default);
+    Task<bool> ClearLibraryAsync(CancellationToken cancellationToken = default);
     Task<bool> RetryTrackAnalysisAsync(Guid trackId, CancellationToken cancellationToken = default);
+    Task<bool> RetryAllLibraryTracksAsync(CancellationToken cancellationToken = default);
     Task<(Stream Stream, string ContentType)?> GetTrackAudioStreamAsync(Guid trackId, CancellationToken cancellationToken = default);
     Task<RenderMixResponseViewModel> RenderMixFromLibraryAsync(
         Guid trackAId,

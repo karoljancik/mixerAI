@@ -1,33 +1,33 @@
 :root {
   color-scheme: dark;
   --bg: #000000;
-  --bg-soft: #0a0a0a;
-  --bg-border: #1a1a1a;
-  --panel: #111111;
-  --panel-strong: #171717;
-  --panel-border: #2a2a2a;
-  --panel-border-strong: #333333;
-  --text: #e0e0e0;
-  --text-dim: #777777;
-  --muted: #888888;
-  --muted-strong: #aaaaaa;
-  --accent: #08B2E3;
-  --accent-glow: transparent;
+  --bg-soft: #050505;
+  --bg-border: #111111;
+  --panel: #0d0d0d;
+  --panel-strong: #111111;
+  --panel-border: #222222;
+  --panel-border-strong: #2a2a2a;
+  --text: #ffffff;
+  --text-dim: #bbbbbb; 
+  --muted: #a0a0a0;
+  --muted-strong: #cccccc;
+  --accent: #00e5ff;
+  --accent-glow: rgba(0, 229, 255, 0.4);
   --accent-soft: rgba(0, 229, 255, 0.15);
   --blue: #08B2E3;
-  --blue-glow: transparent;
-  --blue-soft: rgba(255, 0, 85, 0.15);
+  --blue-glow: rgba(8, 178, 227, 0.4);
+  --blue-soft: rgba(8, 178, 227, 0.15);
   --gold: #ffaa00;
   --success: #00ff77;
   --warning: #ffb700;
   --danger: #ff5555;
-  --shadow: none;
-  font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --shadow: 0 4px 12px rgba(0,0,0,0.5);
+  font-family: 'Outfit', "Segoe UI", Roboto, sans-serif;
   line-height: 1.3;
   font-weight: 400;
   color: var(--text);
   font-variant-numeric: tabular-nums;
-  font-size: 13px; /* Rekordbox small density */
+  font-size: 13px;
 }
 
 * {
@@ -155,6 +155,28 @@ button {
   color: #000; 
   box-shadow: 0 0 15px rgba(8, 178, 227, 0.4);
 }
+.prim.action-btn.master-active {
+    background: var(--gold);
+    color: #000;
+    box-shadow: 0 0 15px var(--gold-glow);
+}
+
+.danger-btn {
+    background: transparent;
+    border-color: rgba(255, 68, 68, 0.4);
+    color: #ff4444;
+}
+
+.danger-btn:hover {
+    background: rgba(255, 68, 68, 0.1);
+    border-color: #ff4444;
+    box-shadow: 0 0 15px rgba(255, 68, 68, 0.3);
+}
+
+.danger-btn:active {
+    background: #ff4444;
+    color: #fff;
+}
 .primary-button:disabled {
   background: var(--panel);
   border-color: var(--panel-border);
@@ -228,6 +250,7 @@ button {
   flex-direction: column;
   border-right: 1px solid var(--panel-border);
   padding: 0;
+  background: linear-gradient(180deg, #111 0%, #080808 100%);
 }
 .deck:last-child {
   border-right: none;
@@ -279,6 +302,10 @@ button {
   outline: none;
   border-color: #08b2e3;
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px rgba(8, 178, 227, 0.35), 0 0 18px rgba(8, 178, 227, 0.12);
+}
+.deck-header select option {
+  background-color: #0d0d0d;
+  color: #fff;
 }
 .deck-header .deck-id {
   font-size: 1.5rem;
@@ -368,8 +395,9 @@ button {
 .deck-local-waveform {
   height: 60px;
   margin-top: 0.5rem;
-  background: var(--bg);
-  border: 1px solid var(--panel-border);
+  background: #000;
+  border: 1px solid var(--panel-border-strong);
+  box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
 }
 
 /* MIXER (Center) */
@@ -469,16 +497,17 @@ button {
 
 /* SIDEVIEW TREE */
 .browser-tree {
-  width: 250px;
+  width: 160px;
   background: #080808;
   border-right: 1px solid var(--panel-border);
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
 }
 .copilot-panel {
-  width: 360px;
-  min-width: 320px;
-  max-width: 380px;
+  width: 240px;
+  min-width: 220px;
+  max-width: 300px;
   background: #0c0c0c;
   border-right: 1px solid rgba(8, 178, 227, 0.28);
   display: flex;
@@ -486,6 +515,7 @@ button {
   gap: 0.55rem;
   padding: 0.55rem;
   overflow-y: auto;
+  flex-shrink: 0;
 }
 .copilot-header {
   display: flex;
@@ -688,6 +718,7 @@ button {
 }
 .rb-table th {
   position: sticky;
+  position: relative; /* FOR RESIZER */
   top: 0;
   background: var(--panel-strong);
   color: var(--text-dim);
@@ -697,6 +728,26 @@ button {
   text-align: left;
   font-weight: normal;
   z-index: 10;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resizer {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%;
+  width: 4px;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+  background: transparent;
+  transition: background 0.2s;
+}
+
+.resizer:hover, .resizer.isResizing {
+  background: var(--blue);
 }
 .rb-table td {
   padding: 4px 8px;
@@ -916,31 +967,53 @@ tr[draggable]:active {
   gap: 5px;
   user-select: none;
 }
+.eq-knob-visual-wrapper {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.eq-knob-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
 .eq-knob {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
-  background: radial-gradient(circle at 8px 8px, #333, #000);
-  border: 1px solid #222;
+  background: radial-gradient(circle at 10px 10px, #444, #000);
+  border: 1px solid #111;
   position: relative;
   cursor: ns-resize;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.8);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.9), inset 0 1px 1px rgba(255,255,255,0.1);
+  z-index: 2;
+}
+.eq-knob:active {
+  background: radial-gradient(circle at 10px 10px, #555, #000);
 }
 .eq-knob-indicator {
   position: absolute;
-  top: 2px;
+  top: 3px;
   left: 50%;
   transform: translateX(-50%);
   width: 3px;
   height: 7px;
   background: #fff;
-  border-radius: 1px;
+  border-radius: 50px;
+  box-shadow: 0 0 2px rgba(0,0,0,0.5);
 }
 .eq-label {
-  font-size: 9px;
-  color: #666;
-  font-weight: 700;
+  font-size: 10px;
+  color: #aaa;
+  font-weight: 800;
   text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
 }
 .deck-controls-wrapper {
   display: flex;
@@ -1004,8 +1077,8 @@ tr[draggable]:active {
 
 .sync-btn, .master-btn {
   background: #000;
-  border: 1px solid #222;
-  color: #444;
+  border: 1px solid #333;
+  color: #888; /* LIGHTER FOR BETTER VISIBILITY WHEN OFF */
   font-size: 7.5px;
   font-weight: 900;
   padding: 1px 3px;

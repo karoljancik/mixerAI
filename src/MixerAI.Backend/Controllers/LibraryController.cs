@@ -44,10 +44,7 @@ public class LibraryController : ControllerBase
         var track = await _db.Tracks.FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId);
         if (track == null) return NotFound();
 
-        // Reconstruct correct file path using upload path, to ignore absolute paths from previous environment (Windows vs Docker)
         var actualFilePath = TrackStoragePathResolver.ResolvePhysicalPath(_uploadPath, track.FilePath);
-
-        // Delete physical file
         if (System.IO.File.Exists(actualFilePath))
             System.IO.File.Delete(actualFilePath);
 
@@ -55,6 +52,25 @@ public class LibraryController : ControllerBase
         await _db.SaveChangesAsync();
 
         return Ok(new { message = "Track deleted." });
+    }
+
+    [HttpDelete]
+    public async Task<IActionResult> DeleteAllTracks()
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var tracks = await _db.Tracks.Where(t => t.UserId == userId).ToListAsync();
+        
+        foreach (var track in tracks)
+        {
+            var actualFilePath = TrackStoragePathResolver.ResolvePhysicalPath(_uploadPath, track.FilePath);
+            if (System.IO.File.Exists(actualFilePath))
+                System.IO.File.Delete(actualFilePath);
+        }
+
+        _db.Tracks.RemoveRange(tracks);
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Library cleared.", count = tracks.Count });
     }
 
     [HttpPost("{id:guid}/retry-analysis")]
@@ -74,6 +90,35 @@ public class LibraryController : ControllerBase
 
         await QueueTrackAnalysisAsync(track.Id);
         return Accepted(new { message = "Track analysis queued.", trackId = track.Id });
+    }
+
+    [HttpPost("retry-all")]
+    public async Task<IActionResult> RetryAllTracks(CancellationToken cancellationToken)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var tracks = await _db.Tracks
+            .Where(t => t.UserId == userId && t.Status != "Analyzing")
+            .ToListAsync(cancellationToken);
+
+        if (tracks.Count == 0)
+        {
+            return Ok(new { message = "No tracks to re-analyze." });
+        }
+
+        foreach (var track in tracks)
+        {
+            track.Status = "Pending";
+            track.LastAnalysisError = null;
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+
+        foreach (var track in tracks)
+        {
+            await QueueTrackAnalysisAsync(track.Id);
+        }
+
+        return Accepted(new { message = $"Queued re-analysis for {tracks.Count} track(s)." });
     }
 
     [HttpPost("upload")]

@@ -9,6 +9,7 @@ export type Track = {
   title: string;
   artist: string | null;
   bpm: number | null;
+  beatOffset: number | null;
   camelotKey: string | null;
   durationSeconds: number;
   waveformDataJson: string | null;

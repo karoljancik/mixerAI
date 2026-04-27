@@ -47,10 +47,24 @@ public sealed class LibraryController : ControllerBase
         return deleted ? NoContent() : NotFound();
     }
 
+    [HttpDelete("clear")]
+    public async Task<IActionResult> ClearAll(CancellationToken cancellationToken)
+    {
+        var accepted = await _backendClient.ClearLibraryAsync(cancellationToken);
+        return accepted ? NoContent() : BadRequest();
+    }
+
     [HttpPost("{id:guid}/retry-analysis")]
     public async Task<IActionResult> Retry(Guid id, CancellationToken cancellationToken)
     {
         var accepted = await _backendClient.RetryTrackAnalysisAsync(id, cancellationToken);
+        return accepted ? Accepted() : BadRequest();
+    }
+
+    [HttpPost("retry-all")]
+    public async Task<IActionResult> RetryAll(CancellationToken cancellationToken)
+    {
+        var accepted = await _backendClient.RetryAllLibraryTracksAsync(cancellationToken);
         return accepted ? Accepted() : BadRequest();
     }
 

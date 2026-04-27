@@ -37,7 +37,8 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
                        ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(connectionString));
+    options.UseNpgsql(connectionString)
+           .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 
 // Identity minimal API (Token Bearer / Cookies pre API registráciu a login)
 builder.Services.AddAuthorization();
@@ -76,6 +77,12 @@ using (var scope = app.Services.CreateScope())
         try
         {
             logger.LogInformation("Applying EF Core migrations for MixerAI.Backend. Attempt {Attempt}/10.", attempt);
+            
+            // Manual check for column to avoid migration block if tool missing
+            try {
+                db.Database.ExecuteSqlRaw("ALTER TABLE \"Tracks\" ADD COLUMN IF NOT EXISTS \"BeatOffset\" double precision NULL;");
+            } catch { /* Ignore if it fails here, Migrate might handle it or it might already exist */ }
+
             db.Database.Migrate();
             break;
         }

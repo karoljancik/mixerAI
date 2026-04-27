@@ -114,6 +114,7 @@ public class TrackAnalysisService
             var result = JsonDocument.Parse(json).RootElement;
 
             track.BPM = result.GetProperty("bpm").GetDouble();
+            track.BeatOffset = result.TryGetProperty("beat_offset", out var bo) ? bo.GetDouble() : 0.0;
             track.CamelotKey = result.GetProperty("camelot").GetString();
             track.DurationSeconds = result.GetProperty("duration").GetDouble();
             track.WaveformDataJson = result.GetProperty("waveform").GetRawText();

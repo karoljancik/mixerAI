@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { startTransition, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { api } from "./api";
 import { GainSlider } from "./components/GainSlider";
 import { WaveformCanvas } from "./components/WaveformCanvas";
@@ -86,6 +86,90 @@ const EMPTY_WAVEFORM: WaveformBands = {
   transient: [],
 };
 
+const TrackRow = React.memo(({ 
+  track, 
+  index, 
+  isSelected, 
+  previewTrackId, 
+  previewCurrentTime, 
+  isPreviewing,
+  togglePreview,
+  handlePreviewSeek,
+  setSelectedDeckAId,
+  setSelectedDeckBId,
+  handleRetryTrack,
+  handleDeleteTrack
+}: {
+  track: Track;
+  index: number;
+  isSelected: boolean;
+  previewTrackId: string | null;
+  previewCurrentTime: number;
+  isPreviewing: boolean;
+  togglePreview: (id: string) => void;
+  handlePreviewSeek: (time: number) => void;
+  setSelectedDeckAId: (id: string) => void;
+  setSelectedDeckBId: (id: string) => void;
+  handleRetryTrack: (t: Track) => void;
+  handleDeleteTrack: (t: Track) => void;
+}) => {
+  const waveform = useMemo(() => parseWaveform(track), [track]);
+
+  return (
+    <tr 
+      className={isSelected ? 'selected' : ''}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/plain', track.id);
+      }}
+    >
+      <td>{index + 1}</td>
+      <td style={{ padding: '4px' }}>
+        <MiniWaveform 
+          samples={waveform} 
+          durationSeconds={track.durationSeconds || 1} 
+          currentTime={previewTrackId === track.id ? previewCurrentTime : 0}
+          isPreviewing={previewTrackId === track.id}
+          onSeek={(time) => {
+            if (previewTrackId !== track.id) togglePreview(track.id);
+            handlePreviewSeek(time);
+          }}
+          width={140}
+          height={28}
+        />
+      </td>
+      <td>
+        <div className="flex-row">
+          <button 
+            className={`action-btn ${previewTrackId === track.id && isPreviewing ? 'active pulse' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePreview(track.id);
+            }}
+            title="Preview track"
+          >
+            {previewTrackId === track.id && isPreviewing ? "⏹" : "▶"}
+          </button>
+          <span>{track.title}</span>
+        </div>
+      </td>
+      <td className="small-text">{track.artist || "--"}</td>
+      <td>{track.bpm ? track.bpm.toFixed(1) : "--"}</td>
+      <td>{track.camelotKey || "--"}</td>
+      <td>{formatDuration(track.durationSeconds)}</td>
+      <td className="status-cell">{track.status}</td>
+      <td>
+        <div className="flex-row">
+          <button className="action-btn deck-assign" disabled={track.status.toLowerCase() !== "ready"} onClick={() => setSelectedDeckAId(track.id)}>1</button>
+          <button className="action-btn deck-assign" disabled={track.status.toLowerCase() !== "ready"} onClick={() => setSelectedDeckBId(track.id)}>2</button>
+          <button className="action-btn" disabled={track.status.toLowerCase() === "analyzing"} onClick={() => handleRetryTrack(track)}>RETRY</button>
+          <button className="action-btn danger" onClick={() => handleDeleteTrack(track)}>DEL</button>
+        </div>
+      </td>
+    </tr>
+  );
+});
+
 function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
 }
@@ -165,11 +249,12 @@ function buildBeatMarkers(track: Track | null): BeatMarker[] {
     return [];
   }
 
-  const totalBeats = Math.ceil(track.durationSeconds / beatPeriodSeconds) + 1;
+  const offset = track.beatOffset || 0;
+  const totalBeats = Math.ceil((track.durationSeconds - offset) / beatPeriodSeconds) + 1;
   const markers: BeatMarker[] = [];
 
   for (let index = 0; index < totalBeats; index += 1) {
-    const timelineSeconds = Number((index * beatPeriodSeconds).toFixed(3));
+    const timelineSeconds = Number((offset + index * beatPeriodSeconds).toFixed(3));
     if (timelineSeconds > track.durationSeconds) {
       break;
     }
@@ -459,8 +544,26 @@ function downloadBlob(blobUrl: string, fileName: string) {
   link.click();
 }
 
-function PhaseMeter({ phase, isMaster, isSynced }: { phase: number, isMaster: boolean, isSynced: boolean }) {
-  const currentBlock = Math.floor(phase * 4);
+const PhaseMeter = React.memo(({ audioRef, bpm, isMaster, isSynced }: { audioRef: React.RefObject<HTMLAudioElement | null>, bpm: number, isMaster: boolean, isSynced: boolean }) => {
+  const [currentBlock, setCurrentBlock] = useState(0);
+
+  useEffect(() => {
+    if (!audioRef) return;
+    let animFrame: number;
+    const update = () => {
+      const audio = audioRef.current;
+      if (audio) {
+        const period = 60 / (bpm || 120);
+        const phase = (audio.currentTime % period) / period;
+        const block = Math.floor(phase * 4);
+        setCurrentBlock(block);
+      }
+      animFrame = requestAnimationFrame(update);
+    };
+    update();
+    return () => cancelAnimationFrame(animFrame);
+  }, [audioRef, bpm]);
+
   return (
     <div className="phase-meter">
       {[0, 1, 2, 3].map(i => (
@@ -471,7 +574,26 @@ function PhaseMeter({ phase, isMaster, isSynced }: { phase: number, isMaster: bo
       ))}
     </div>
   );
-}
+});
+
+const TimeDisplay = React.memo(({ audioRef }: { audioRef: React.RefObject<HTMLAudioElement | null> }) => {
+  const [time, setTime] = useState(0);
+
+  useEffect(() => {
+    let animFrame: number;
+    const update = () => {
+      const audio = audioRef.current;
+      if (audio) {
+        setTime(audio.currentTime);
+      }
+      animFrame = requestAnimationFrame(update);
+    };
+    update();
+    return () => cancelAnimationFrame(animFrame);
+  }, [audioRef]);
+
+  return <strong className="precision-readout">{formatPreciseClock(time)}</strong>;
+});
 
 
 export default function App() {
@@ -496,9 +618,9 @@ export default function App() {
   const [selectedDeckBId, setSelectedDeckBId] = useState("");
 
   const libraryTracks = workspace?.tracks ?? [];
-  const readyTracks = libraryTracks.filter((track) => track.status.toLowerCase() === "ready");
-  const selectedTrackA = libraryTracks.find((track) => track.id === selectedDeckAId) ?? null;
-  const selectedTrackB = libraryTracks.find((track) => track.id === selectedDeckBId) ?? null;
+  const selectedTrackA = useMemo(() => libraryTracks.find((track) => track.id === selectedDeckAId) ?? null, [libraryTracks, selectedDeckAId]);
+  const selectedTrackB = useMemo(() => libraryTracks.find((track) => track.id === selectedDeckBId) ?? null, [libraryTracks, selectedDeckBId]);
+  const readyTracks = useMemo(() => libraryTracks.filter((track) => track.status.toLowerCase() === "ready"), [libraryTracks]);
 
   const [masterDeck, setMasterDeck] = useState<'A' | 'B' | null>(null);
   const [isSyncA, setIsSyncA] = useState(false);
@@ -571,9 +693,20 @@ export default function App() {
     }
   }, [eqB]);
 
+  const setEqAHigh = useCallback((v: number) => React.startTransition(() => setEqA(prev => ({ ...prev, high: v }))), []);
+  const setEqAMid = useCallback((v: number) => React.startTransition(() => setEqA(prev => ({ ...prev, mid: v }))), []);
+  const setEqALow = useCallback((v: number) => React.startTransition(() => setEqA(prev => ({ ...prev, low: v }))), []);
+  const setEqAGain = useCallback((v: number) => React.startTransition(() => setEqA(prev => ({ ...prev, gain: v }))), []);
+
+  const setEqBHigh = useCallback((v: number) => React.startTransition(() => setEqB(prev => ({ ...prev, high: v }))), []);
+  const setEqBMid = useCallback((v: number) => React.startTransition(() => setEqB(prev => ({ ...prev, mid: v }))), []);
+  const setEqBLow = useCallback((v: number) => React.startTransition(() => setEqB(prev => ({ ...prev, low: v }))), []);
+  const setEqBGain = useCallback((v: number) => React.startTransition(() => setEqB(prev => ({ ...prev, gain: v }))), []);
+
+
   const [isPlayingB, setIsPlayingB] = useState(false);
 
-  const startScrubbing = (e, audioRef, durationSeconds) => {
+  const startScrubbing = useCallback((e, audioRef, durationSeconds) => {
     const audio = audioRef.current;
     if (!audio) return;
 
@@ -588,11 +721,10 @@ export default function App() {
     const startTime = audio.currentTime;
     const ZOOM_PX_PER_SEC = 112;
     
-    // Explicitly use durationSeconds from metadata if audio.duration is not yet final (e.g. Infinity/NaN)
-    const audioDur = audio.duration;
-    const resolvedDuration = (Number.isFinite(audioDur) && audioDur > 0)
-      ? audioDur
-      : (durationSeconds && durationSeconds > 0 ? durationSeconds : 0);
+    // Use durationSeconds from metadata as a strong fallback
+    const resolvedDuration = (durationSeconds && durationSeconds > 0)
+      ? durationSeconds
+      : (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0);
 
     const clampTime = (value) => {
       if (resolvedDuration <= 0) return Math.max(0, value);
@@ -623,7 +755,15 @@ export default function App() {
     target.addEventListener("pointermove", onPointerMove);
     target.addEventListener("pointerup", onPointerUp);
     target.addEventListener("pointercancel", onPointerUp);
-  };
+  }, []);
+
+  const handleScrubA = useCallback((e) => {
+    startScrubbing(e, deckAAudioRef, selectedTrackA?.durationSeconds);
+  }, [startScrubbing, selectedTrackA?.durationSeconds]);
+
+  const handleScrubB = useCallback((e) => {
+    startScrubbing(e, deckBAudioRef, selectedTrackB?.durationSeconds);
+  }, [startScrubbing, selectedTrackB?.durationSeconds]);
 
   const [useManualRenderPlan, setUseManualRenderPlan] = useState(false);
   const [manualOverlayStartSeconds, setManualOverlayStartSeconds] = useState(24);
@@ -699,25 +839,51 @@ export default function App() {
         const audioB = deckBAudioRef.current;
         
         if (!audioA.paused && !audioB.paused) {
-          const baseRate = selectedTrackB.bpm / selectedTrackA.bpm;
-          const periodA = 60 / selectedTrackA.bpm;
-          const periodB = 60 / selectedTrackB.bpm;
+          const bpmA = selectedTrackA.bpm;
+          const bpmB = selectedTrackB.bpm;
           
-          // Calculate phases (0..1)
-          const phaseA = (audioA.currentTime % periodA) / periodA;
-          const phaseB = (audioB.currentTime % periodB) / periodB;
+          // Find the best multiple (0.5x, 1x, 2x) for slave A to match master B
+          const options = [0.5, 1.0, 2.0];
+          const bestMultiple = options.reduce((prev, curr) => 
+            Math.abs((bpmB * curr) - bpmA) < Math.abs((bpmB * prev) - bpmA) ? curr : prev
+          );
+          
+          const baseRate = (bpmB * bestMultiple) / bpmA;
+          const periodA = 60 / bpmA;
+          const periodB = 60 / bpmB;
+          const offsetA = selectedTrackA.beatOffset || 0;
+          const offsetB = selectedTrackB.beatOffset || 0;
+          
+          // Calculate phases relative to peak-offset (0..1)
+          let phaseA = ((audioA.currentTime - offsetA) % periodA) / periodA;
+          if (phaseA < 0) phaseA += 1;
+          let phaseB = ((audioB.currentTime - offsetB) % periodB) / periodB;
+          if (phaseB < 0) phaseB += 1;
           
           let diff = phaseB - phaseA;
           if (diff > 0.5) diff -= 1;
           if (diff < -0.5) diff += 1;
           
-          // Phase pulling: speed up if behind, slow down if ahead
-          // diff > 0 means Master (B) is ahead of Sync (A)
-          const nudge = diff * 0.15; 
-          audioA.playbackRate = clamp(baseRate * (1 + nudge), baseRate * 0.90, baseRate * 1.10);
+          // Phase pulling: aggression correction
+          const nudge = diff * 0.42; 
+          
+          // Hard snap if drift is significant
+          if (Math.abs(diff) > 0.12) {
+            const targetTime = offsetA + Math.floor((audioA.currentTime - offsetA) / periodA) * periodA + (phaseB * periodA);
+            if (Math.abs(audioA.currentTime - targetTime) > 0.005) {
+              audioA.currentTime = targetTime;
+            }
+          }
+
+          audioA.playbackRate = clamp(baseRate * (1 + nudge), baseRate * 0.75, baseRate * 1.25);
         } else {
-          const baseRate = selectedTrackB.bpm / selectedTrackA.bpm;
-          audioA.playbackRate = baseRate;
+          const bpmA = selectedTrackA.bpm;
+          const bpmB = selectedTrackB.bpm;
+          const options = [0.5, 1.0, 2.0];
+          const bestMultiple = options.reduce((prev, curr) => 
+            Math.abs((bpmB * curr) - bpmA) < Math.abs((bpmB * prev) - bpmA) ? curr : prev
+          );
+          audioA.playbackRate = (bpmB * bestMultiple) / bpmA;
         }
       } else if (!isSyncA) {
         if (deckAAudioRef.current) deckAAudioRef.current.playbackRate = 1.0;
@@ -729,31 +895,59 @@ export default function App() {
         const audioB = deckBAudioRef.current;
         
         if (!audioA.paused && !audioB.paused) {
-          const baseRate = selectedTrackA.bpm / selectedTrackB.bpm;
-          const periodA = 60 / selectedTrackA.bpm;
-          const periodB = 60 / selectedTrackB.bpm;
+          const bpmA = selectedTrackA.bpm;
+          const bpmB = selectedTrackB.bpm;
+
+          // Find the best multiple (0.5x, 1x, 2x) for slave B to match master A
+          const options = [0.5, 1.0, 2.0];
+          const bestMultiple = options.reduce((prev, curr) => 
+            Math.abs((bpmA * curr) - bpmB) < Math.abs((bpmA * prev) - bpmB) ? curr : prev
+          );
           
-          const phaseA = (audioA.currentTime % periodA) / periodA;
-          const phaseB = (audioB.currentTime % periodB) / periodB;
+          const baseRate = (bpmA * bestMultiple) / bpmB;
+          const periodA = 60 / bpmA;
+          const periodB = 60 / bpmB;
+          const offsetA = selectedTrackA.beatOffset || 0;
+          const offsetB = selectedTrackB.beatOffset || 0;
           
-          let diff = phaseA - phaseB; // phaseA is Master
+          let phaseA = ((audioA.currentTime - offsetA) % periodA) / periodA;
+          if (phaseA < 0) phaseA += 1;
+          let phaseB = ((audioB.currentTime - offsetB) % periodB) / periodB;
+          if (phaseB < 0) phaseB += 1;
+          
+          let diff = phaseA - phaseB;
           if (diff > 0.5) diff -= 1;
           if (diff < -0.5) diff += 1;
           
-          const nudge = diff * 0.15;
-          audioB.playbackRate = clamp(baseRate * (1 + nudge), baseRate * 0.90, baseRate * 1.10);
+          const nudge = diff * 0.42;
+
+          if (Math.abs(diff) > 0.12) {
+            const targetTime = offsetB + Math.floor((audioB.currentTime - offsetB) / periodB) * periodB + (phaseA * periodB);
+            if (Math.abs(audioB.currentTime - targetTime) > 0.005) {
+              audioB.currentTime = targetTime;
+            }
+          }
+
+          audioB.playbackRate = clamp(baseRate * (1 + nudge), baseRate * 0.75, baseRate * 1.25);
         } else {
-          const baseRate = selectedTrackA.bpm / selectedTrackB.bpm;
-          audioB.playbackRate = baseRate;
+          const bpmA = selectedTrackA.bpm;
+          const bpmB = selectedTrackB.bpm;
+          const options = [0.5, 1.0, 2.0];
+          const bestMultiple = options.reduce((prev, curr) => 
+            Math.abs((bpmA * curr) - bpmB) < Math.abs((bpmA * prev) - bpmB) ? curr : prev
+          );
+          audioB.playbackRate = (bpmA * bestMultiple) / bpmB;
         }
       } else if (!isSyncB) {
         if (deckBAudioRef.current) deckBAudioRef.current.playbackRate = 1.0;
       }
     };
 
-    intervalId = setInterval(syncProcessor, 50); // Correct 20 times per second
+    if (isSyncA || isSyncB) {
+      intervalId = setInterval(syncProcessor, 35);
+    }
     return () => clearInterval(intervalId);
-  }, [isSyncA, isSyncB, masterDeck, selectedTrackA?.bpm, selectedTrackB?.bpm, isPlayingA, isPlayingB]);
+  }, [isSyncA, isSyncB, masterDeck, selectedTrackA, selectedTrackB]);
 
 
   useEffect(() => {
@@ -1003,18 +1197,32 @@ export default function App() {
   }
 
   async function handleRetryLibraryTracks() {
-    const retryableTracks = libraryTracks.filter((track) => track.status.toLowerCase() !== "analyzing");
-    if (retryableTracks.length === 0) {
-      setNotice("No tracks are available for re-analysis right now.");
-      return;
-    }
-
+    setUploadPending(true); // Reuse spinner or just mark as busy
     try {
-      await Promise.all(retryableTracks.map((track) => api.retryTrackAnalysis(track.id)));
-      setNotice(`Queued re-analysis for ${retryableTracks.length} track(s).`);
+      await api.retryLibraryTracks();
+      setNotice("Bulk re-analysis started for the entire library.");
       await refreshWorkspace(false);
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : "Bulk re-analysis failed.");
+    } finally {
+      setUploadPending(false);
+    }
+  }
+
+  async function handleClearLibrary() {
+    if (!window.confirm("ARE YOU SURE? This will DELETE ALL TRACKS from your library permanently!")) {
+      return;
+    }
+
+    setUploadPending(true);
+    try {
+      await api.clearLibrary();
+      setNotice("Library cleared successfully.");
+      await refreshWorkspace(false);
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : "Failed to clear library.");
+    } finally {
+      setUploadPending(false);
     }
   }
 
@@ -1112,27 +1320,66 @@ export default function App() {
     setNotice("Analyzer timings loaded into the manual render controls.");
   }
 
-  const filteredTracks = libraryTracks.filter((track) => {
-    const query = libraryQuery.trim().toLowerCase();
-    if (!query) {
-      return true;
-    }
-
-    return [
-      track.title,
-      track.artist ?? "",
-      track.camelotKey ?? "",
-      track.status,
-    ].some((value) => value.toLowerCase().includes(query));
+  const [colWidths, setColWidths] = useState({
+    idx: 40,
+    wave: 100,
+    title: 250,
+    artist: 150,
+    bpm: 55,
+    key: 55,
+    time: 65,
+    status: 75,
+    act: 140
   });
+  const [resizingCol, setResizingCol] = useState(null);
+
+  useEffect(() => {
+    if (!resizingCol) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - resizingCol.startX;
+      // ONLY ALLOW RESIZING FOR TITLE, and with a safety limit
+      if (resizingCol.col === 'title') {
+        const newWidth = Math.max(resizingCol.startWidth + delta, 100);
+        const maxWidth = 800; // Cap to prevent pushing others too far
+        setColWidths(prev => ({ ...prev, title: Math.min(newWidth, maxWidth) }));
+      }
+    };
+    const handleMouseUp = () => setResizingCol(null);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizingCol]);
+
+  const startResizing = (col, e) => {
+    e.preventDefault();
+    setResizingCol({ col, startX: e.clientX, startWidth: colWidths[col] });
+  };
+
+  const filteredTracks = useMemo(() => {
+    return libraryTracks.filter((track) => {
+      const query = libraryQuery.trim().toLowerCase();
+      if (!query) {
+        return true;
+      }
+
+      return [
+        track.title,
+        track.artist ?? "",
+        track.camelotKey ?? "",
+        track.status,
+      ].some((value) => value.toLowerCase().includes(query));
+    });
+  }, [libraryTracks, libraryQuery]);
 
   const deckAWaveform = useMemo(() => parseWaveform(selectedTrackA), [selectedTrackA]);
   const deckBWaveform = useMemo(() => parseWaveform(selectedTrackB), [selectedTrackB]);
   const deckABeatMarkers = useMemo(() => buildBeatMarkers(selectedTrackA), [selectedTrackA]);
   const deckBBeatMarkers = useMemo(() => buildBeatMarkers(selectedTrackB), [selectedTrackB]);
-  const pairAssessment = buildPairAssessment(selectedTrackA, selectedTrackB);
-  const practiceNotes = buildPracticeNotes(selectedTrackA, selectedTrackB);
-  const transitionCopilot = buildTransitionCopilot(selectedTrackA, selectedTrackB);
+  const pairAssessment = useMemo(() => buildPairAssessment(selectedTrackA, selectedTrackB), [selectedTrackA, selectedTrackB]);
+  const transitionCopilot = useMemo(() => buildTransitionCopilot(selectedTrackA, selectedTrackB), [selectedTrackA, selectedTrackB]);
   const setJourney = useMemo(() => buildSetJourney(readyTracks), [readyTracks]);
 
   const overlayMax = Math.max(0, Math.min((selectedTrackA?.durationSeconds ?? 90) - 8, 96));
@@ -1436,7 +1683,7 @@ export default function App() {
               background="transparent" 
               audioRef={deckAAudioRef}
               durationSeconds={selectedTrackA?.durationSeconds}
-              onPointerDown={(e) => startScrubbing(e, deckAAudioRef, selectedTrackA?.durationSeconds)}
+              onPointerDown={handleScrubA}
             />
           </div>
           <div className={`global-waveform-row ${dragOverB ? 'drag-over' : ''}`}
@@ -1457,7 +1704,7 @@ export default function App() {
               background="transparent" 
               audioRef={deckBAudioRef}
               durationSeconds={selectedTrackB?.durationSeconds}
-              onPointerDown={(e) => startScrubbing(e, deckBAudioRef, selectedTrackB?.durationSeconds)}
+              onPointerDown={handleScrubB}
             />
           </div>
         </section>
@@ -1485,14 +1732,17 @@ export default function App() {
                             initAudioContextNode(deckAAudioRef.current, audioNodesA);
                             
                             // Snap phase on PLAY if SYNC is active and Master exists
-                            if (deckAAudioRef.current.paused && isSyncA && masterDeck === 'B' && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                              const offsetA = selectedTrackA.beatOffset || 0;
+                              const offsetB = selectedTrackB.beatOffset || 0;
                               const pA = 60 / selectedTrackA.bpm;
                               const pB = 60 / selectedTrackB.bpm;
-                              const phaseM = (deckBAudioRef.current.currentTime % pB) / pB;
-                              const targetTime = Math.floor(deckAAudioRef.current.currentTime / pA) * pA + (phaseM * pA);
+                              
+                              // Phase relative to grid offset
+                              const phaseM = ((deckBAudioRef.current.currentTime - offsetB) % pB) / pB;
+                              const targetTime = offsetA + Math.floor((deckAAudioRef.current.currentTime - offsetA) / pA) * pA + (phaseM * pA);
+                              
                               deckAAudioRef.current.currentTime = targetTime;
                               setDeckACurrentTime(targetTime);
-                            }
 
                             deckAAudioRef.current.paused ? deckAAudioRef.current.play() : deckAAudioRef.current.pause(); 
                             if (audioNodesA.current?.ctx.state === 'suspended') audioNodesA.current.ctx.resume();
@@ -1505,10 +1755,12 @@ export default function App() {
                             const nextMaster = masterDeck === 'A' ? null : 'A';
                             setMasterDeck(nextMaster);
                             if (nextMaster === 'A' && isSyncB && deckAAudioRef.current && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                              const offsetA = selectedTrackA.beatOffset || 0;
+                              const offsetB = selectedTrackB.beatOffset || 0;
                               const pA = 60 / selectedTrackA.bpm;
                               const pB = 60 / selectedTrackB.bpm;
-                              const phaseM = (deckAAudioRef.current.currentTime % pA) / pA;
-                              const targetTime = Math.floor(deckBAudioRef.current.currentTime / pB) * pB + (phaseM * pB);
+                              const phaseM = ((deckAAudioRef.current.currentTime - offsetA) % pA) / pA;
+                              const targetTime = offsetB + Math.floor((deckBAudioRef.current.currentTime - offsetB) / pB) * pB + (phaseM * pB);
                               deckBAudioRef.current.currentTime = targetTime;
                               setDeckBCurrentTime(targetTime);
                             }
@@ -1517,10 +1769,12 @@ export default function App() {
                             const nextSync = !isSyncA;
                             setIsSyncA(nextSync);
                             if (nextSync && masterDeck === 'B' && deckAAudioRef.current && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                              const offsetA = selectedTrackA.beatOffset || 0;
+                              const offsetB = selectedTrackB.beatOffset || 0;
                               const pA = 60 / selectedTrackA.bpm;
                               const pB = 60 / selectedTrackB.bpm;
-                              const phaseM = (deckBAudioRef.current.currentTime % pB) / pB;
-                              const targetTime = Math.floor(deckAAudioRef.current.currentTime / pA) * pA + (phaseM * pA);
+                              const phaseM = ((deckBAudioRef.current.currentTime - offsetB) % pB) / pB;
+                              const targetTime = offsetA + Math.floor((deckAAudioRef.current.currentTime - offsetA) / pA) * pA + (phaseM * pA);
                               deckAAudioRef.current.currentTime = targetTime;
                               setDeckACurrentTime(targetTime);
                             }
@@ -1528,17 +1782,17 @@ export default function App() {
                         </div>
                       </div>
                       <div className="eq-controls-group eq-controls-group-mirrored">
-                        <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqA.high} onChange={(v) => setEqA({...eqA, high: v})} />
-                        <Knob label="MID" min={-26} max={6} centerValue={0} value={eqA.mid} onChange={(v) => setEqA({...eqA, mid: v})} />
-                        <Knob label="LOW" min={-26} max={6} centerValue={0} value={eqA.low} onChange={(v) => setEqA({...eqA, low: v})} />
-                        <GainSlider label="GAIN" min={0} max={2} value={eqA.gain} onChange={(v) => setEqA({...eqA, gain: v})} />
+                        <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqA.high} onChange={setEqAHigh} />
+                        <Knob label="MID" min={-26} max={6} centerValue={0} value={eqA.mid} onChange={setEqAMid} />
+                        <Knob label="LOW" min={-26} max={6} centerValue={0} value={eqA.low} onChange={setEqALow} />
+                        <GainSlider label="GAIN" min={0} max={2} value={eqA.gain} onChange={setEqAGain} />
                       </div>
                     </div>
                     <div className="deck-position-panel">
                       <div className="precision-row">
                         <span className="precision-label">Live</span>
-                        <strong className="precision-readout">{formatPreciseClock(deckACurrentTime)}</strong>
-                        <button type="button" className="action-btn" onClick={() => setDeckASeekInput(formatPreciseSeconds(deckACurrentTime))}>NOW</button>
+                        <TimeDisplay audioRef={deckAAudioRef} />
+                        <button type="button" className="action-btn" onClick={() => setDeckASeekInput(formatPreciseSeconds(deckAAudioRef.current?.currentTime || 0))}>NOW</button>
                       </div>
                       <div className="precision-row">
                         <span className="precision-label">Jump To</span>
@@ -1568,9 +1822,7 @@ export default function App() {
                   style={{display: 'none'}}
                   onPlay={() => setIsPlayingA(true)}
                   onPause={() => setIsPlayingA(false)}
-                  onTimeUpdate={() => setDeckACurrentTime(deckAAudioRef.current?.currentTime ?? 0)}
                   onSeeked={() => setDeckACurrentTime(deckAAudioRef.current?.currentTime ?? 0)}
-                  onLoadedMetadata={() => setDeckACurrentTime(deckAAudioRef.current?.currentTime ?? 0)}
                 />
               </div>
               <div className="deck-stats deck-stats-mirrored">
@@ -1579,7 +1831,8 @@ export default function App() {
                   <div className="stat-value">
                     <strong>{effectiveBPMA ? effectiveBPMA.toFixed(2) : "--"}</strong>
                     <PhaseMeter 
-                      phase={(deckAAudioRef.current?.currentTime || 0) % (60 / (selectedTrackA?.bpm || 120)) / (60 / (selectedTrackA?.bpm || 120))} 
+                      audioRef={deckAAudioRef}
+                      bpm={selectedTrackA?.bpm || 120}
                       isMaster={masterDeck === 'A'} 
                       isSynced={isSyncA} 
                     />
@@ -1597,14 +1850,31 @@ export default function App() {
             <div className="mixer-section">
               <span className="mixer-title">CROSSFADER MIN / MAX</span>
               <div className="crossfader-container">
-                <input className="crossfader-input" type="range" min="0" max="100" value={crossfader} onChange={(e) => setCrossfader(Number(e.target.value))} />
+                <input 
+                  className="crossfader-input" 
+                  type="range" 
+                  min="0" 
+                  max="100" 
+                  value={crossfader} 
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    React.startTransition(() => setCrossfader(val));
+                  }} 
+                />
               </div>
             </div>
             <div className="mixer-section">
               <span className="mixer-title">RENDER AI MIX</span>
                <label className="toggle-row">
                 <span>Manual timing</span>
-                <input type="checkbox" checked={useManualRenderPlan} onChange={(e) => setUseManualRenderPlan(e.target.checked)} />
+                <input 
+                  type="checkbox" 
+                  checked={useManualRenderPlan} 
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    React.startTransition(() => setUseManualRenderPlan(val));
+                  }} 
+                />
               </label>
 
               <div className="precision-row" style={{ marginTop: '4px', marginBottom: '8px' }}>
@@ -1612,7 +1882,10 @@ export default function App() {
                 <select 
                   className="precision-input" 
                   value={renderStyle} 
-                  onChange={(e) => setRenderStyle(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    React.startTransition(() => setRenderStyle(val));
+                  }}
                   style={{ background: '#111', color: 'var(--blue)', border: '1px solid #333', fontSize: '10px', height: '22px' }}
                 >
                   <option value="bass_swap">BASS SWAP (Club-style EQ)</option>
@@ -1744,10 +2017,12 @@ export default function App() {
                             
                             // Snap phase on PLAY if SYNC is active and Master exists
                             if (deckBAudioRef.current.paused && isSyncB && masterDeck === 'A' && deckAAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                              const offsetA = selectedTrackA.beatOffset || 0;
+                              const offsetB = selectedTrackB.beatOffset || 0;
                               const pA = 60 / selectedTrackA.bpm;
                               const pB = 60 / selectedTrackB.bpm;
-                              const phaseM = (deckAAudioRef.current.currentTime % pA) / pA;
-                              const targetTime = Math.floor(deckBAudioRef.current.currentTime / pB) * pB + (phaseM * pB);
+                              const phaseM = ((deckAAudioRef.current.currentTime - offsetA) % pA) / pA;
+                              const targetTime = offsetB + Math.floor((deckBAudioRef.current.currentTime - offsetB) / pB) * pB + (phaseM * pB);
                               deckBAudioRef.current.currentTime = targetTime;
                               setDeckBCurrentTime(targetTime);
                             }
@@ -1786,17 +2061,17 @@ export default function App() {
                         </div>
                       </div>
                       <div className="eq-controls-group">
-                        <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqB.high} onChange={(v) => setEqB({...eqB, high: v})} />
-                        <Knob label="MID" min={-26} max={6} centerValue={0} value={eqB.mid} onChange={(v) => setEqB({...eqB, mid: v})} />
-                        <Knob label="LOW" min={-26} max={6} centerValue={0} value={eqB.low} onChange={(v) => setEqB({...eqB, low: v})} />
-                        <GainSlider label="GAIN" min={0} max={2} value={eqB.gain} onChange={(v) => setEqB({...eqB, gain: v})} />
+                        <Knob label="HIGH" min={-26} max={6} centerValue={0} value={eqB.high} onChange={setEqBHigh} />
+                        <Knob label="MID" min={-26} max={6} centerValue={0} value={eqB.mid} onChange={setEqBMid} />
+                        <Knob label="LOW" min={-26} max={6} centerValue={0} value={eqB.low} onChange={setEqBLow} />
+                        <GainSlider label="GAIN" min={0} max={2} value={eqB.gain} onChange={setEqBGain} />
                       </div>
                     </div>
                     <div className="deck-position-panel">
                       <div className="precision-row">
                         <span className="precision-label">Live</span>
-                        <strong className="precision-readout">{formatPreciseClock(deckBCurrentTime)}</strong>
-                        <button type="button" className="action-btn" onClick={() => setDeckBSeekInput(formatPreciseSeconds(deckBCurrentTime))}>NOW</button>
+                        <TimeDisplay audioRef={deckBAudioRef} />
+                        <button type="button" className="action-btn" onClick={() => setDeckBSeekInput(formatPreciseSeconds(deckBAudioRef.current?.currentTime || 0))}>NOW</button>
                       </div>
                       <div className="precision-row">
                         <span className="precision-label">Jump To</span>
@@ -1826,9 +2101,7 @@ export default function App() {
                   style={{display: 'none'}}
                   onPlay={() => setIsPlayingB(true)}
                   onPause={() => setIsPlayingB(false)}
-                  onTimeUpdate={() => setDeckBCurrentTime(deckBAudioRef.current?.currentTime ?? 0)}
                   onSeeked={() => setDeckBCurrentTime(deckBAudioRef.current?.currentTime ?? 0)}
-                  onLoadedMetadata={() => setDeckBCurrentTime(deckBAudioRef.current?.currentTime ?? 0)}
                 />
               </div>
               <div className="deck-stats">
@@ -1837,7 +2110,8 @@ export default function App() {
                   <div className="stat-value">
                     <strong>{effectiveBPMB ? effectiveBPMB.toFixed(2) : "--"}</strong>
                     <PhaseMeter 
-                      phase={(deckBAudioRef.current?.currentTime || 0) % (60 / (selectedTrackB?.bpm || 120)) / (60 / (selectedTrackB?.bpm || 120))} 
+                      audioRef={deckBAudioRef}
+                      bpm={selectedTrackB?.bpm || 120} 
                       isMaster={masterDeck === 'B'} 
                       isSynced={isSyncB} 
                     />
@@ -1890,9 +2164,12 @@ export default function App() {
                <div className="upload-dropzone-hint">
                  Drag & drop audio files sem z Prieskumnika.
                </div>
-               <button type="button" className="action-btn" style={{ width: '100%' }} onClick={() => handleRetryLibraryTracks()} disabled={uploadPending}>
-                 REANALYZE LIBRARY
-               </button>
+                <button type="button" className="action-btn" style={{ width: '100%' }} onClick={() => handleRetryLibraryTracks()} disabled={uploadPending}>
+                  REANALYZE LIBRARY
+                </button>
+                <button type="button" className="action-btn danger-btn" style={{ width: '100%', marginTop: '0.25rem' }} onClick={() => handleClearLibrary()} disabled={uploadPending}>
+                  CLEAR LIBRARY
+                </button>
             </div>
           </aside>
 
@@ -2073,71 +2350,37 @@ export default function App() {
               <table className="rb-table">
                 <thead>
                   <tr>
-                    <th style={{ width: '30px' }}>#</th>
-                    <th>NAHLAD</th>
-                    <th>TRACK TITLE</th>
-                    <th>ARTIST</th>
-                    <th style={{ width: '60px' }}>BPM</th>
-                    <th style={{ width: '60px' }}>KEY</th>
-                    <th style={{ width: '70px' }}>TIME</th>
-                    <th style={{ width: '80px' }}>STATUS</th>
-                    <th style={{ width: '150px' }}>ACTION</th>
+                    <th style={{ width: colWidths.idx }}>#</th>
+                    <th style={{ width: colWidths.wave }}>NAHLAD</th>
+                    <th style={{ width: colWidths.title }}>
+                      TRACK TITLE
+                      <div className="resizer" onMouseDown={(e) => startResizing('title', e)} />
+                    </th>
+                    <th style={{ width: colWidths.artist }}>ARTIST</th>
+                    <th style={{ width: colWidths.bpm }}>BPM</th>
+                    <th style={{ width: colWidths.key }}>KEY</th>
+                    <th style={{ width: colWidths.time }}>TIME</th>
+                    <th style={{ width: colWidths.status }}>STATUS</th>
+                    <th style={{ width: colWidths.act }}>ACTION</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredTracks.map((track, i) => (
-                    <tr 
-                      key={track.id} 
-                      className={(track.id === selectedDeckAId || track.id === selectedDeckBId) ? 'selected' : ''}
-                      draggable
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData('text/plain', track.id);
-                      }}
-                    >
-                      <td>{i + 1}</td>
-                      <td style={{ padding: '4px' }}>
-                        <MiniWaveform 
-                          samples={parseWaveform(track)} 
-                          durationSeconds={track.durationSeconds || 1} 
-                          currentTime={previewTrackId === track.id ? previewCurrentTime : 0}
-                          isPreviewing={previewTrackId === track.id}
-                          onSeek={(time) => {
-                            if (previewTrackId !== track.id) togglePreview(track.id);
-                            handlePreviewSeek(time);
-                          }}
-                          width={140}
-                          height={28}
-                        />
-                      </td>
-                      <td>
-                        <div className="flex-row">
-                          <button 
-                            className={`action-btn ${previewTrackId === track.id && isPreviewing ? 'active pulse' : ''}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              togglePreview(track.id);
-                            }}
-                            title="Preview track"
-                          >
-                            {previewTrackId === track.id && isPreviewing ? "⏹" : "▶"}
-                          </button>
-                          <span>{track.title}</span>
-                        </div>
-                      </td>
-                      <td className="small-text">{track.artist || "--"}</td>
-                      <td>{track.bpm ? track.bpm.toFixed(1) : "--"}</td>
-                      <td>{track.camelotKey || "--"}</td>
-                      <td>{formatDuration(track.durationSeconds)}</td>
-                      <td className="status-cell">{track.status}</td>
-                      <td>
-                        <div className="flex-row">
-                          <button className="action-btn deck-assign" disabled={track.status.toLowerCase() !== "ready"} onClick={() => setSelectedDeckAId(track.id)}>1</button>
-                          <button className="action-btn deck-assign" disabled={track.status.toLowerCase() !== "ready"} onClick={() => setSelectedDeckBId(track.id)}>2</button>
-                          <button className="action-btn" disabled={track.status.toLowerCase() === "analyzing"} onClick={() => handleRetryTrack(track)}>RETRY</button>
-                          <button className="action-btn danger" onClick={() => handleDeleteTrack(track)}>DEL</button>
-                        </div>
-                      </td>
-                    </tr>
+                    <TrackRow 
+                      key={track.id}
+                      track={track}
+                      index={i}
+                      isSelected={track.id === selectedDeckAId || track.id === selectedDeckBId}
+                      previewTrackId={previewTrackId}
+                      previewCurrentTime={previewCurrentTime}
+                      isPreviewing={isPreviewing}
+                      togglePreview={togglePreview}
+                      handlePreviewSeek={handlePreviewSeek}
+                      setSelectedDeckAId={setSelectedDeckAId}
+                      setSelectedDeckBId={setSelectedDeckBId}
+                      handleRetryTrack={handleRetryTrack}
+                      handleDeleteTrack={handleDeleteTrack}
+                    />
                   ))}
                   {filteredTracks.length === 0 && (
                     <tr>
