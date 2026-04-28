@@ -364,21 +364,53 @@ button {
   display: flex;
   gap: 1rem;
   margin-top: 0;
-  justify-content: flex-end;
-  align-self: flex-end;
+  justify-content: flex-start;
+  align-self: flex-start;
   flex-shrink: 0;
+  align-items: stretch;
+  width: 100%;
 }
 .deck-a .deck-stats {
-  margin-left: auto;
+  margin-left: 0;
+}
+.deck-stats.deck-stats-mirrored {
+  align-self: flex-start !important;
+  flex-direction: row;
+}
+.deck-overview-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1 1 0;
+  min-width: 420px;
+  max-width: none;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  padding: 0.2rem 0.3rem 0.25rem;
+  overflow: hidden;
+}
+.deck-overview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.deck-overview-panel canvas {
+  width: 100% !important;
 }
 .deck-stat-box {
   background: var(--bg);
   border: 1px solid var(--panel-border);
   min-width: 54px;
+  min-height: 54px;
   padding: 0.15rem 0.35rem;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  flex: 0 0 auto;
 }
 .deck-stat-box span {
   font-size: 0.55rem;

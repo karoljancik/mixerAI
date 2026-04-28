@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useMemo } from "react";
 import type { PointerEventHandler, RefObject } from "react";
 import type { BeatMarker, WaveformBands } from "../types";
 
-const ZOOM_PX_PER_SEC = 112;
+
 
 function clamp01(value: number): number {
   return Math.min(Math.max(value, 0), 1);
@@ -77,8 +77,10 @@ type WaveformCanvasProps = {
   accent?: string;
   background?: string;
   beatMarkers?: BeatMarker[];
+  cueTimeSeconds?: number | null;
   durationSeconds?: number;
   audioRef?: RefObject<HTMLAudioElement | null>;
+  zoomPxPerSec?: number;
   className?: string;
   onPointerDown?: PointerEventHandler<HTMLCanvasElement>;
 };
@@ -88,8 +90,10 @@ export const WaveformCanvas = React.memo(({
   accent = "#f1c40f",
   background = "#000",
   beatMarkers = [],
+  cueTimeSeconds = null,
   durationSeconds,
   audioRef,
+  zoomPxPerSec = 112,
   className,
   onPointerDown,
 }: WaveformCanvasProps) => {
@@ -241,11 +245,11 @@ export const WaveformCanvas = React.memo(({
 
       const tiles = offscreenRef.current;
       if (tiles.length > 0 && durationSeconds && durationSeconds > 0) {
-        const visibleSeconds = width / ZOOM_PX_PER_SEC;
+        const visibleSeconds = width / zoomPxPerSec;
         const startTime = currentTime - visibleSeconds / 2;
         
         // Draw cached tiles
-        const scaleX = ZOOM_PX_PER_SEC / CACHE_PX_PER_SEC;
+        const scaleX = zoomPxPerSec / CACHE_PX_PER_SEC;
         
         tiles.forEach((tile, i) => {
           const tileStartSec = (i * 8000) / CACHE_PX_PER_SEC;
@@ -253,7 +257,7 @@ export const WaveformCanvas = React.memo(({
           
           if (tileEndSec < startTime || tileStartSec > startTime + visibleSeconds) return;
 
-          const xOffset = (tileStartSec - startTime) * ZOOM_PX_PER_SEC;
+          const xOffset = (tileStartSec - startTime) * zoomPxPerSec;
           context.drawImage(
             tile,
             0, 0, tile.width, tile.height,
@@ -273,14 +277,43 @@ export const WaveformCanvas = React.memo(({
         });
 
         if (beatMarkers.length > 0) {
-          const visibleTimeStart = currentTime - (width / 2) / ZOOM_PX_PER_SEC;
-          const visibleTimeEnd = currentTime + (width / 2) / ZOOM_PX_PER_SEC;
+          const visibleTimeStart = currentTime - (width / 2) / zoomPxPerSec;
+          const visibleTimeEnd = currentTime + (width / 2) / zoomPxPerSec;
           
           for (let i = 0; i < beatMarkers.length; i++) {
             const m = beatMarkers[i];
             if (m.timelineSeconds < visibleTimeStart || m.timelineSeconds > visibleTimeEnd) continue;
-            const x = Math.round((width / 2) + ((m.timelineSeconds - currentTime) * ZOOM_PX_PER_SEC));
+            const x = Math.round((width / 2) + ((m.timelineSeconds - currentTime) * zoomPxPerSec));
             drawBeatMarker(context, x, height, m.isBar);
+          }
+        }
+
+        if (cueTimeSeconds !== null && Number.isFinite(cueTimeSeconds)) {
+          const cueX = Math.round((width / 2) + ((cueTimeSeconds - currentTime) * zoomPxPerSec));
+          if (cueX >= -12 && cueX <= width + 12) {
+            context.strokeStyle = "rgba(255, 176, 32, 0.95)";
+            context.lineWidth = 1.5;
+            context.setLineDash([5, 4]);
+            context.beginPath();
+            context.moveTo(cueX + 0.5, 0);
+            context.lineTo(cueX + 0.5, height);
+            context.stroke();
+            context.setLineDash([]);
+
+            context.fillStyle = "rgba(255, 176, 32, 0.95)";
+            context.beginPath();
+            context.moveTo(cueX - 4, 8);
+            context.lineTo(cueX + 4, 8);
+            context.lineTo(cueX, 2);
+            context.closePath();
+            context.fill();
+
+            context.beginPath();
+            context.moveTo(cueX - 4, height - 8);
+            context.lineTo(cueX + 4, height - 8);
+            context.lineTo(cueX, height - 2);
+            context.closePath();
+            context.fill();
           }
         }
       }
@@ -304,7 +337,7 @@ export const WaveformCanvas = React.memo(({
 
     redraw();
     return () => cancelAnimationFrame(animFrame);
-  }, [accent, audioRef, background, beatMarkers, durationSeconds, bounds]);
+  }, [accent, audioRef, background, beatMarkers, cueTimeSeconds, durationSeconds, bounds, zoomPxPerSec]);
 
 
   return <canvas ref={canvasRef} className={className} style={{ cursor: "ew-resize" }} onPointerDown={onPointerDown} />;

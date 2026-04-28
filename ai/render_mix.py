@@ -16,6 +16,7 @@ from beat_sync import (
     build_atempo_filters,
     combined_transition_rhythm_score,
     compute_tempo_ratio,
+    estimate_beat_offset_seconds,
     normalize_dnb_bpm,
     snap_to_beat_grid,
     snap_to_bar_grid,
@@ -94,6 +95,8 @@ def main() -> int:
                 preserve_track_a_from_start=args.preserve_track_a_from_start,
                 min_ai_overlay_start_seconds=args.min_ai_overlay_start_seconds,
                 max_ai_overlay_start_seconds=args.max_ai_overlay_start_seconds,
+                left_beat_offset_seconds=float(structure_a.get("beat_offset_seconds", 0.0) or 0.0),
+                right_beat_offset_seconds=float(structure_b.get("beat_offset_seconds", 0.0) or 0.0),
             )
         else:
             model, normalization_mean, normalization_std = model_bundle
@@ -108,6 +111,8 @@ def main() -> int:
                 preserve_track_a_from_start=args.preserve_track_a_from_start,
                 min_ai_overlay_start_seconds=args.min_ai_overlay_start_seconds,
                 max_ai_overlay_start_seconds=args.max_ai_overlay_start_seconds,
+                left_beat_offset_seconds=float(structure_a.get("beat_offset_seconds", 0.0) or 0.0),
+                right_beat_offset_seconds=float(structure_b.get("beat_offset_seconds", 0.0) or 0.0),
             )
         candidate = refine_transition_candidate(candidate)
         transition_plan = build_transition_plan(
@@ -210,14 +215,28 @@ def analyze_track_structure(track_path: Path, sample_rate: int) -> dict:
     raw_bpm = float(tempo_value[0]) if hasattr(tempo_value, "__len__") else float(tempo_value)
     bpm = normalize_dnb_bpm(raw_bpm)
     beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop_length)
-    beat_offset_seconds = float(beat_times[0]) if beat_times.size > 0 else 0.0
+    beat_offset_seconds = estimate_beat_offset_seconds(
+        beat_times,
+        onset_envelope,
+        sr,
+        hop_length,
+        duration_seconds,
+        bpm if bpm > 0 else raw_bpm,
+    )
+    analysis_period = beat_period_seconds(bpm if bpm > 0 else raw_bpm)
+    if beat_times.size >= 2 and analysis_period > 0:
+        median_interval = float(np.median(np.diff(beat_times)))
+        if abs(median_interval - analysis_period) > (analysis_period * 0.18):
+            beat_times = np.arange(beat_offset_seconds, duration_seconds + analysis_period, analysis_period, dtype=float)
+    elif beat_times.size < 24 and analysis_period > 0:
+        beat_times = np.arange(beat_offset_seconds, duration_seconds + analysis_period, analysis_period, dtype=float)
 
     if beat_times.size < 24:
-        fallback_period = beat_period_seconds(bpm if bpm > 0 else 174.0)
-        beat_times = np.arange(0.0, max(duration_seconds, fallback_period), fallback_period, dtype=float)
-        beat_frames = librosa.time_to_frames(beat_times, sr=sr, hop_length=hop_length)
-    else:
-        beat_frames = np.asarray(beat_frames, dtype=int)
+        fallback_period = analysis_period if analysis_period > 0 else beat_period_seconds(bpm if bpm > 0 else 174.0)
+        beat_times = np.arange(beat_offset_seconds, duration_seconds + fallback_period, fallback_period, dtype=float)
+
+    beat_frames = librosa.time_to_frames(beat_times, sr=sr, hop_length=hop_length)
+    beat_frames = np.asarray(beat_frames, dtype=int)
 
     rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
     spectrum = np.abs(librosa.stft(y=y, n_fft=2048, hop_length=hop_length)) + 1e-9
@@ -433,6 +452,8 @@ def build_transition_plan(
                     float(drop_cue["time"]),
                     left_bpm,
                     right_bpm,
+                    left_beat_offset,
+                    right_beat_offset,
                 )
                 tempo_match = 1.0 - min(abs(1.0 - tempo_ratio), 0.35) / 0.35
                 style_bonus = compute_transition_style_bonus(style_spec["style"], exit_cue, drop_cue)
@@ -569,6 +590,8 @@ def choose_best_transition(
     preserve_track_a_from_start: bool,
     min_ai_overlay_start_seconds: int,
     max_ai_overlay_start_seconds: int,
+    left_beat_offset_seconds: float = 0.0,
+    right_beat_offset_seconds: float = 0.0,
 ) -> dict:
     min_ai_overlay_start_seconds = max(0, int(min_ai_overlay_start_seconds))
     max_ai_overlay_start_seconds = max(min_ai_overlay_start_seconds + 1, int(max_ai_overlay_start_seconds))
@@ -626,6 +649,8 @@ def choose_best_transition(
             metadata_item["right_start_seconds"],
             metadata_item["left_bpm"],
             metadata_item["right_bpm"],
+            left_beat_offset_seconds,
+            right_beat_offset_seconds,
         )
         if preserve_track_a_from_start:
             transition_bias = compute_intro_overlay_bias(
@@ -649,8 +674,10 @@ def choose_best_transition(
     best_candidate = dict(metadata[best_index])
     best_candidate["probability"] = float(reranked_probabilities[best_index])
     best_candidate["model_probability"] = float(probabilities[best_index])
+    best_candidate["left_beat_offset_seconds"] = float(left_beat_offset_seconds)
+    best_candidate["right_beat_offset_seconds"] = float(right_beat_offset_seconds)
     best_candidate["overlay_start_seconds"] = (
-        snap_to_beat_grid(best_candidate["left_start_seconds"], best_candidate["left_bpm"])
+        snap_to_beat_grid(best_candidate["left_start_seconds"], best_candidate["left_bpm"], beat_offset_seconds=left_beat_offset_seconds)
         if preserve_track_a_from_start
         else best_candidate["left_start_seconds"]
     )
@@ -666,6 +693,8 @@ def choose_best_transition_without_model(
     preserve_track_a_from_start: bool,
     min_ai_overlay_start_seconds: int,
     max_ai_overlay_start_seconds: int,
+    left_beat_offset_seconds: float = 0.0,
+    right_beat_offset_seconds: float = 0.0,
 ) -> dict:
     min_ai_overlay_start_seconds = max(0, int(min_ai_overlay_start_seconds))
     max_ai_overlay_start_seconds = max(min_ai_overlay_start_seconds + 1, int(max_ai_overlay_start_seconds))
@@ -703,6 +732,8 @@ def choose_best_transition_without_model(
                 right_start_seconds,
                 left_bpm,
                 right_bpm,
+                left_beat_offset_seconds,
+                right_beat_offset_seconds,
             )
             tempo_ratio = compute_tempo_ratio(right_bpm, left_bpm)
             tempo_penalty = min(abs(1.0 - float(tempo_ratio)), 1.0)
@@ -736,11 +767,13 @@ def choose_best_transition_without_model(
                 "probability": float(combined_score),
                 "model_probability": 0.0,
                 "overlay_start_seconds": (
-                    snap_to_beat_grid(left_start_seconds, left_bpm)
+                    snap_to_beat_grid(left_start_seconds, left_bpm, beat_offset_seconds=left_beat_offset_seconds)
                     if preserve_track_a_from_start
                     else left_start_seconds
                 ),
                 "tempo_ratio": float(tempo_ratio),
+                "left_beat_offset_seconds": float(left_beat_offset_seconds),
+                "right_beat_offset_seconds": float(right_beat_offset_seconds),
             }
 
     if best_candidate is None:
@@ -751,8 +784,10 @@ def choose_best_transition_without_model(
 
 def refine_transition_candidate(candidate: dict) -> dict:
     refined = dict(candidate)
-    overlay_start = snap_to_beat_grid(float(refined["overlay_start_seconds"]), float(refined["left_bpm"]))
-    right_start = snap_to_beat_grid(float(refined["right_start_seconds"]), float(refined["right_bpm"]))
+    left_beat_offset_seconds = float(refined.get("left_beat_offset_seconds", 0.0) or 0.0)
+    right_beat_offset_seconds = float(refined.get("right_beat_offset_seconds", 0.0) or 0.0)
+    overlay_start = snap_to_beat_grid(float(refined["overlay_start_seconds"]), float(refined["left_bpm"]), beat_offset_seconds=left_beat_offset_seconds)
+    right_start = snap_to_beat_grid(float(refined["right_start_seconds"]), float(refined["right_bpm"]), beat_offset_seconds=right_beat_offset_seconds)
     beat_period = beat_period_seconds(float(refined["right_bpm"]))
     if beat_period <= 0:
         refined["overlay_start_seconds"] = overlay_start
@@ -767,6 +802,8 @@ def refine_transition_candidate(candidate: dict) -> dict:
         right_start,
         float(refined["left_bpm"]),
         float(refined["right_bpm"]),
+        left_beat_offset_seconds,
+        right_beat_offset_seconds,
     )
 
     offset = -search_radius
@@ -777,6 +814,8 @@ def refine_transition_candidate(candidate: dict) -> dict:
             candidate_right_start,
             float(refined["left_bpm"]),
             float(refined["right_bpm"]),
+            left_beat_offset_seconds,
+            right_beat_offset_seconds,
         )
         if score > best_score:
             best_score = score

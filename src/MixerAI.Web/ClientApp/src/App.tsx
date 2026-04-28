@@ -244,12 +244,30 @@ function parseWaveform(track: Track | null): WaveformBands {
   }
 }
 
-function buildBeatMarkers(track: Track | null): BeatMarker[] {
-  if (!track?.bpm || !Number.isFinite(track.bpm) || track.bpm <= 0 || !Number.isFinite(track.durationSeconds) || track.durationSeconds <= 0) {
+function normalizeBpmForMatch(bpm: number, referenceBpm?: number | null): number {
+  if (!Number.isFinite(bpm) || bpm <= 0) {
+    return bpm;
+  }
+
+  const candidates = [bpm * 0.5, bpm, bpm * 2].filter((candidate) => Number.isFinite(candidate) && candidate > 0);
+  if (!referenceBpm || !Number.isFinite(referenceBpm) || referenceBpm <= 0) {
+    return bpm;
+  }
+
+  return candidates.reduce((best, candidate) => {
+    const bestDelta = Math.abs(best - referenceBpm);
+    const candidateDelta = Math.abs(candidate - referenceBpm);
+    return candidateDelta < bestDelta ? candidate : best;
+  }, bpm);
+}
+
+function buildBeatMarkers(track: Track | null, referenceBpm?: number | null): BeatMarker[] {
+  const bpm = normalizeBpmForMatch(track?.bpm || 0, referenceBpm);
+  if (!track?.bpm || !Number.isFinite(bpm) || bpm <= 0 || !Number.isFinite(track.durationSeconds) || track.durationSeconds <= 0) {
     return [];
   }
 
-  const beatPeriodSeconds = 60 / track.bpm;
+  const beatPeriodSeconds = 60 / bpm;
   if (!Number.isFinite(beatPeriodSeconds) || beatPeriodSeconds <= 0) {
     return [];
   }
@@ -314,6 +332,25 @@ function getBeatTiming(track: Track | null) {
   };
 }
 
+function getSyncTiming(track: Track | null, referenceBpm?: number | null) {
+  if (!track?.bpm || !Number.isFinite(track.bpm) || track.bpm <= 0) {
+    return null;
+  }
+
+  const bpm = normalizeBpmForMatch(track.bpm, referenceBpm);
+  const period = 60 / bpm;
+  if (!Number.isFinite(period) || period <= 0) {
+    return null;
+  }
+
+  return {
+    bpm,
+    period,
+    offset: track.beatOffset || 0,
+    durationSeconds: track.durationSeconds || 0,
+  };
+}
+
 function computePhaseAlignedTargetTime(
   masterTime: number,
   masterTiming: { period: number; offset: number },
@@ -324,6 +361,21 @@ function computePhaseAlignedTargetTime(
   const nearestSlaveBeat = Math.round((slaveTime - slaveTiming.offset) / slaveTiming.period);
   return Math.max(0, slaveTiming.offset + (nearestSlaveBeat * slaveTiming.period) + (masterPhase * slaveTiming.period));
 }
+
+function computeBeatAlignedTargetTime(
+  masterTime: number,
+  masterTiming: { period: number; offset: number },
+  slaveTiming: { period: number; offset: number },
+) {
+  const masterBeatIndex = Math.round((masterTime - masterTiming.offset) / masterTiming.period);
+  return Math.max(0, slaveTiming.offset + (masterBeatIndex * slaveTiming.period));
+}
+
+const SYNC_PHASE_HARD_SNAP_SECONDS = 0.032;
+const SYNC_PHASE_RATE_GAIN = 0.6;
+const SYNC_PHASE_RATE_NUDGE_LIMIT = 0.03;
+const SYNC_PLAYBACK_RATE_MIN = 0.94;
+const SYNC_PLAYBACK_RATE_MAX = 1.06;
 
 function clampMediaTime(time: number, durationSeconds: number): number {
   if (!Number.isFinite(time)) {
@@ -343,55 +395,22 @@ function syncSlaveToMaster(
   masterTrack: Track,
   slaveTrack: Track,
   setSlaveCurrentTime: (value: number) => void,
-  syncLeadSeconds: number,
+  _syncLeadSeconds: number,
 ) {
-  const masterTiming = getBeatTiming(masterTrack);
-  const slaveTiming = getBeatTiming(slaveTrack);
-  if (!masterTiming || !slaveTiming) {
+  const masterTiming = getSyncTiming(masterTrack, slaveTrack.bpm);
+  const slaveTiming = getSyncTiming(slaveTrack, masterTrack.bpm);
+  if (!masterTiming || !slaveTiming || !masterTrack.bpm || !slaveTrack.bpm) {
+    slaveAudio.playbackRate = 1.0;
     return;
   }
 
-  const bpmRatio = masterTiming.bpm / slaveTiming.bpm;
-  const baseRate = bpmRatio * masterAudio.playbackRate;
-
-  if (masterAudio.paused || slaveAudio.paused) {
-    slaveAudio.playbackRate = baseRate;
-    return;
-  }
-
-  const masterRemaining = masterTiming.durationSeconds > 0 ? Math.max(0, masterTiming.durationSeconds - masterAudio.currentTime) : 999;
-  const slaveRemaining = slaveTiming.durationSeconds > 0 ? Math.max(0, slaveTiming.durationSeconds - slaveAudio.currentTime) : 999;
-  const remainingSeconds = Math.min(masterRemaining, slaveRemaining);
-  const releaseWindowSeconds = Math.max(masterTiming.period * 8, slaveTiming.period * 6, 8);
-  const lockStrength = clamp(remainingSeconds / releaseWindowSeconds, 0, 1);
-  const nearEnd = masterRemaining <= Math.max(masterTiming.period * 2, 1.5);
-  const projectedMasterTime = Math.max(0, masterAudio.currentTime + clamp(syncLeadSeconds, 0.008, 0.05));
-
-  const masterPhase = normalizePhase((projectedMasterTime - masterTiming.offset) / masterTiming.period);
+  const baseRate = masterTiming.bpm / slaveTiming.bpm;
+  const masterPhase = normalizePhase((masterAudio.currentTime - masterTiming.offset) / masterTiming.period);
   const slavePhase = normalizePhase((slaveAudio.currentTime - slaveTiming.offset) / slaveTiming.period);
-  const phaseDelta = signedPhaseDelta(masterPhase, slavePhase);
-  const correctionGain = 0.12 + (0.04 * lockStrength);
-  const effectivePhaseDelta = phaseDelta * lockStrength;
-
-  if (!nearEnd && lockStrength > 0.18 && Math.abs(phaseDelta) > 0.05) {
-    const targetTime = clampMediaTime(
-      computePhaseAlignedTargetTime(
-        projectedMasterTime,
-        masterTiming,
-        slaveTiming,
-        slaveAudio.currentTime,
-      ),
-      slaveTiming.durationSeconds,
-    );
-
-    if (Math.abs(slaveAudio.currentTime - targetTime) > 0.004) {
-      slaveAudio.currentTime = targetTime;
-      setSlaveCurrentTime(targetTime);
-    }
-  }
-
-  const rateAdjustment = clamp(1 + (effectivePhaseDelta * correctionGain), 0.99, 1.01);
-  slaveAudio.playbackRate = baseRate * rateAdjustment;
+  const phaseError = signedPhaseDelta(masterPhase, slavePhase);
+  const phaseErrorRatio = phaseError * Math.max(masterTiming.period, slaveTiming.period) / Math.max(slaveTiming.period, 0.001);
+  const rateNudge = clamp(phaseErrorRatio * SYNC_PHASE_RATE_GAIN, -SYNC_PHASE_RATE_NUDGE_LIMIT, SYNC_PHASE_RATE_NUDGE_LIMIT);
+  slaveAudio.playbackRate = clamp(baseRate * (1 + rateNudge), SYNC_PLAYBACK_RATE_MIN, SYNC_PLAYBACK_RATE_MAX);
 }
 
 function snapSlaveToMaster(
@@ -400,24 +419,27 @@ function snapSlaveToMaster(
   masterTrack: Track,
   slaveTrack: Track,
   setSlaveCurrentTime: (value: number) => void,
-  syncLeadSeconds: number,
+  _syncLeadSeconds: number,
 ) {
-  const masterTiming = getBeatTiming(masterTrack);
-  const slaveTiming = getBeatTiming(slaveTrack);
-  if (!masterTiming || !slaveTiming) {
+  const masterTiming = getSyncTiming(masterTrack, slaveTrack.bpm);
+  const slaveTiming = getSyncTiming(slaveTrack, masterTrack.bpm);
+  if (!masterTiming || !slaveTiming || !masterTrack.bpm || !slaveTrack.bpm) {
+    slaveAudio.playbackRate = 1.0;
     return;
   }
 
-  const targetTime = clampMediaTime(computePhaseAlignedTargetTime(
-    Math.max(0, masterAudio.currentTime + clamp(syncLeadSeconds, 0.008, 0.05)),
-    masterTiming,
-    slaveTiming,
-    slaveAudio.currentTime,
-  ), slaveTiming.durationSeconds);
+  const targetTime = clampMediaTime(
+    computeBeatAlignedTargetTime(
+      masterAudio.currentTime,
+      masterTiming,
+      slaveTiming,
+    ),
+    slaveTiming.durationSeconds,
+  );
 
   slaveAudio.currentTime = targetTime;
   setSlaveCurrentTime(targetTime);
-  slaveAudio.playbackRate = (masterTiming.bpm / slaveTiming.bpm) * masterAudio.playbackRate;
+  slaveAudio.playbackRate = masterTiming.bpm / slaveTiming.bpm;
 }
 
 function trackStatusTone(status: string): string {
@@ -777,11 +799,11 @@ export default function App() {
 
 
   const effectiveBPMA = isSyncA && masterDeck === 'B' && selectedTrackB?.bpm
-    ? selectedTrackB.bpm
+    ? normalizeBpmForMatch(selectedTrackA?.bpm ?? 0, selectedTrackB.bpm)
     : (selectedTrackA?.bpm ?? null);
 
   const effectiveBPMB = isSyncB && masterDeck === 'A' && selectedTrackA?.bpm
-    ? selectedTrackA.bpm
+    ? normalizeBpmForMatch(selectedTrackB?.bpm ?? 0, selectedTrackA.bpm)
     : (selectedTrackB?.bpm ?? null);
 
   const [crossfader, setCrossfader] = useState(50);
@@ -866,7 +888,7 @@ export default function App() {
 
   const [isPlayingB, setIsPlayingB] = useState(false);
 
-  const startScrubbing = useCallback((e, audioRef, durationSeconds) => {
+  const startScrubbing = useCallback((e, audioRef, durationSeconds, zoomPxPerSec = 112) => {
     const audio = audioRef.current;
     if (!audio) return;
 
@@ -877,10 +899,6 @@ export default function App() {
     const pointerId = e.pointerId;
     target.setPointerCapture?.(pointerId);
 
-    const startX = e.clientX;
-    const startTime = audio.currentTime;
-    const ZOOM_PX_PER_SEC = 112;
-    
     // Use durationSeconds from metadata as a strong fallback
     const resolvedDuration = (durationSeconds && durationSeconds > 0)
       ? durationSeconds
@@ -891,9 +909,15 @@ export default function App() {
       return Math.max(0, Math.min(value, resolvedDuration));
     };
 
+    const startX = e.clientX;
+    const rect = target.getBoundingClientRect();
+    const initialTime = clampTime(
+      audio.currentTime + (((e.clientX - rect.left) - (rect.width / 2)) / zoomPxPerSec),
+    );
+
     const updateScrubPosition = (clientX) => {
       const deltaX = clientX - startX;
-      const targetTime = clampTime(startTime - (deltaX / ZOOM_PX_PER_SEC));
+      const targetTime = clampTime(initialTime - (deltaX / zoomPxPerSec));
       if (Number.isFinite(targetTime)) {
         audio.currentTime = targetTime;
       }
@@ -917,13 +941,21 @@ export default function App() {
     target.addEventListener("pointercancel", onPointerUp);
   }, []);
 
+  const zoomA = isSyncA && masterDeck === 'B' && selectedTrackA?.bpm && selectedTrackB?.bpm
+    ? 112 * (selectedTrackA.bpm / selectedTrackB.bpm)
+    : 112;
+
+  const zoomB = isSyncB && masterDeck === 'A' && selectedTrackA?.bpm && selectedTrackB?.bpm
+    ? 112 * (selectedTrackB.bpm / selectedTrackA.bpm)
+    : 112;
+
   const handleScrubA = useCallback((e) => {
-    startScrubbing(e, deckAAudioRef, selectedTrackA?.durationSeconds);
-  }, [startScrubbing, selectedTrackA?.durationSeconds]);
+    startScrubbing(e, deckAAudioRef, selectedTrackA?.durationSeconds, zoomA);
+  }, [startScrubbing, selectedTrackA?.durationSeconds, zoomA]);
 
   const handleScrubB = useCallback((e) => {
-    startScrubbing(e, deckBAudioRef, selectedTrackB?.durationSeconds);
-  }, [startScrubbing, selectedTrackB?.durationSeconds]);
+    startScrubbing(e, deckBAudioRef, selectedTrackB?.durationSeconds, zoomB);
+  }, [startScrubbing, selectedTrackB?.durationSeconds, zoomB]);
 
   const [useManualRenderPlan, setUseManualRenderPlan] = useState(false);
   const [manualOverlayStartSeconds, setManualOverlayStartSeconds] = useState(24);
@@ -952,6 +984,8 @@ export default function App() {
   const [analysisResult, setAnalysisResult] = useState<MixAnalysisResult | null>(null);
   const [deckACurrentTime, setDeckACurrentTime] = useState(0);
   const [deckBCurrentTime, setDeckBCurrentTime] = useState(0);
+  const [deckACueTime, setDeckACueTime] = useState<number | null>(null);
+  const [deckBCueTime, setDeckBCueTime] = useState<number | null>(null);
   const [deckASeekInput, setDeckASeekInput] = useState("0.000");
   const [deckBSeekInput, setDeckBSeekInput] = useState("0.000");
   const [previewTrackId, setPreviewTrackId] = useState<string | null>(null);
@@ -988,9 +1022,9 @@ export default function App() {
     };
   }, []);
 
-  // Continuous Phase & Tempo Sync Loop
+  // Beat lock sync keeps the slave locked to the master's beat grid while playing.
   useEffect(() => {
-    let intervalId: any;
+    let intervalId: number | undefined;
 
     const syncProcessor = () => {
       const audioA = deckAAudioRef.current;
@@ -1000,21 +1034,36 @@ export default function App() {
 
       if (isSyncA && masterDeck === 'B' && syncReady) {
         syncSlaveToMaster(audioB, audioA, selectedTrackB, selectedTrackA, setDeckACurrentTime, leadSeconds);
-      } else if (audioA && !isSyncA) {
+      } else if (audioA) {
         audioA.playbackRate = 1.0;
       }
 
       if (isSyncB && masterDeck === 'A' && syncReady) {
         syncSlaveToMaster(audioA, audioB, selectedTrackA, selectedTrackB, setDeckBCurrentTime, leadSeconds);
-      } else if (audioB && !isSyncB) {
+      } else if (audioB) {
         audioB.playbackRate = 1.0;
       }
     };
 
     if (isSyncA || isSyncB) {
-      intervalId = setInterval(syncProcessor, 16);
+      syncProcessor();
+      intervalId = window.setInterval(syncProcessor, 16);
+    } else {
+      const audioA = deckAAudioRef.current;
+      const audioB = deckBAudioRef.current;
+      if (audioA) {
+        audioA.playbackRate = 1.0;
+      }
+      if (audioB) {
+        audioB.playbackRate = 1.0;
+      }
     }
-    return () => clearInterval(intervalId);
+
+    return () => {
+      if (intervalId !== undefined) {
+        window.clearInterval(intervalId);
+      }
+    };
   }, [isSyncA, isSyncB, masterDeck, selectedTrackA, selectedTrackB]);
 
 
@@ -1067,6 +1116,7 @@ export default function App() {
 
     deckAAudioRef.current.load();
     deckAAudioRef.current.currentTime = 0;
+    setDeckACueTime(null);
     setIsPlayingA(false);
   }, [selectedDeckAId]);
 
@@ -1077,6 +1127,7 @@ export default function App() {
 
     deckBAudioRef.current.load();
     deckBAudioRef.current.currentTime = 0;
+    setDeckBCueTime(null);
     setIsPlayingB(false);
   }, [selectedDeckBId]);
 
@@ -1444,8 +1495,14 @@ export default function App() {
 
   const deckAWaveform = useMemo(() => parseWaveform(selectedTrackA), [selectedTrackA]);
   const deckBWaveform = useMemo(() => parseWaveform(selectedTrackB), [selectedTrackB]);
-  const deckABeatMarkers = useMemo(() => buildBeatMarkers(selectedTrackA), [selectedTrackA]);
-  const deckBBeatMarkers = useMemo(() => buildBeatMarkers(selectedTrackB), [selectedTrackB]);
+  const deckABeatMarkers = useMemo(() => buildBeatMarkers(
+    selectedTrackA,
+    isSyncA && masterDeck === 'B' ? selectedTrackB?.bpm ?? null : null,
+  ), [selectedTrackA, selectedTrackB?.bpm, isSyncA, masterDeck]);
+  const deckBBeatMarkers = useMemo(() => buildBeatMarkers(
+    selectedTrackB,
+    isSyncB && masterDeck === 'A' ? selectedTrackA?.bpm ?? null : null,
+  ), [selectedTrackB, selectedTrackA?.bpm, isSyncB, masterDeck]);
   const pairAssessment = useMemo(() => buildPairAssessment(selectedTrackA, selectedTrackB), [selectedTrackA, selectedTrackB]);
   const transitionCopilot = useMemo(() => buildTransitionCopilot(selectedTrackA, selectedTrackB), [selectedTrackA, selectedTrackB]);
   const setJourney = useMemo(() => buildSetJourney(readyTracks), [readyTracks]);
@@ -1517,20 +1574,24 @@ export default function App() {
     setInputValue(formatPreciseSeconds(nextValue));
   }
 
-  function handleResetDeck(
+  function handleSetCuePoint(
     audioRef: React.RefObject<HTMLAudioElement | null>,
     setPlaying: (value: boolean) => void,
     setCurrentTime: (value: number) => void,
     setInputValue: (value: string) => void,
+    setCueTime: (value: number | null) => void,
   ) {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
+    const audio = audioRef.current;
+    const nextCueTime = audio?.currentTime ?? 0;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = nextCueTime;
     }
 
     setPlaying(false);
-    setCurrentTime(0);
-    setInputValue("0.000");
+    setCueTime(nextCueTime);
+    setCurrentTime(nextCueTime);
+    setInputValue(formatPreciseSeconds(nextCueTime));
   }
 
   function handleUseCurrentDeckTimesForRender() {
@@ -1747,9 +1808,11 @@ export default function App() {
               className="waveform-canvas" 
               samples={deckAWaveform} 
               beatMarkers={deckABeatMarkers}
+              cueTimeSeconds={deckACueTime}
               accent="#EF233C" 
               background="transparent" 
               audioRef={deckAAudioRef}
+              zoomPxPerSec={zoomA}
               durationSeconds={selectedTrackA?.durationSeconds}
               onPointerDown={handleScrubA}
             />
@@ -1768,9 +1831,11 @@ export default function App() {
               className="waveform-canvas" 
               samples={deckBWaveform} 
               beatMarkers={deckBBeatMarkers}
+              cueTimeSeconds={deckBCueTime}
               accent="#08B2E3" 
               background="transparent" 
               audioRef={deckBAudioRef}
+              zoomPxPerSec={zoomB}
               durationSeconds={selectedTrackB?.durationSeconds}
               onPointerDown={handleScrubB}
             />
@@ -1794,14 +1859,21 @@ export default function App() {
                   <div className="deck-controls-row">
                     <div className="deck-controls-wrapper deck-controls-wrapper-mirrored">
                       <div className="transport-controls-group transport-controls-group-mirrored">
-                        <button className="cdj-btn cue" onClick={() => handleResetDeck(deckAAudioRef, setIsPlayingA, setDeckACurrentTime, setDeckASeekInput)}>CUE</button>
+                        <button className={`cdj-btn cue ${deckACueTime !== null ? 'active' : ''}`} onClick={() => handleSetCuePoint(deckAAudioRef, setIsPlayingA, setDeckACurrentTime, setDeckASeekInput, setDeckACueTime)}>CUE</button>
                         <button className="cdj-btn play" onClick={() => { 
                           if(deckAAudioRef.current) { 
                             initAudioContextNode(deckAAudioRef.current, audioNodesA);
-                            
-                              if (deckAAudioRef.current && isSyncA && masterDeck === 'B' && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+
+                            if (deckAAudioRef.current.paused) {
+                              const nextStartTime = deckACueTime ?? deckAAudioRef.current.currentTime;
+                              deckAAudioRef.current.currentTime = nextStartTime;
+                              setDeckACurrentTime(nextStartTime);
+                              setDeckASeekInput(formatPreciseSeconds(nextStartTime));
+
+                              if (isSyncA && masterDeck === 'B' && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
                                snapSlaveToMaster(deckBAudioRef.current, deckAAudioRef.current, selectedTrackB, selectedTrackA, setDeckACurrentTime, getSyncLeadSeconds());
                              }
+                            }
 
                             deckAAudioRef.current.paused ? deckAAudioRef.current.play() : deckAAudioRef.current.pause(); 
                             if (audioNodesA.current?.ctx.state === 'suspended') audioNodesA.current.ctx.resume();
@@ -1867,11 +1939,36 @@ export default function App() {
                   style={{display: 'none'}}
                   onPlay={() => setIsPlayingA(true)}
                   onPause={() => setIsPlayingA(false)}
-                  onSeeked={() => setDeckACurrentTime(deckAAudioRef.current?.currentTime ?? 0)}
+                  onSeeked={() => {
+                    const nextTime = deckAAudioRef.current?.currentTime ?? 0;
+                    setDeckACurrentTime(nextTime);
+                  }}
                 />
               </div>
               <div className="deck-stats deck-stats-mirrored">
-                 <div className="deck-stat-box bpm">
+                <div className="deck-overview-panel">
+                  <div className="deck-overview-header">
+                    <span>Overview</span>
+                    <span>{deckACueTime !== null ? `Cue @ ${formatPreciseSeconds(deckACueTime)}` : "No cue set"}</span>
+                  </div>
+                  <MiniWaveform
+                    samples={deckAWaveform}
+                    durationSeconds={selectedTrackA?.durationSeconds || 0}
+                    currentTime={deckACurrentTime}
+                    isPreviewing={true}
+                    beatMarkers={deckABeatMarkers}
+                    cueTimeSeconds={deckACueTime}
+                    fillWidth={true}
+                    height={48}
+                    onSeek={(time) => {
+                      if (!deckAAudioRef.current) return;
+                      deckAAudioRef.current.currentTime = time;
+                      setDeckACurrentTime(time);
+                      setDeckASeekInput(formatPreciseSeconds(time));
+                    }}
+                  />
+                </div>
+                <div className="deck-stat-box bpm">
                   <span>BPM</span>
                   <div className="stat-value">
                     <strong>{effectiveBPMA ? effectiveBPMA.toFixed(2) : "--"}</strong>
@@ -2056,14 +2153,21 @@ export default function App() {
                   <div className="deck-controls-row">
                     <div className="deck-controls-wrapper">
                       <div className="transport-controls-group">
-                        <button className="cdj-btn cue" onClick={() => handleResetDeck(deckBAudioRef, setIsPlayingB, setDeckBCurrentTime, setDeckBSeekInput)}>CUE</button>
+                        <button className={`cdj-btn cue ${deckBCueTime !== null ? 'active' : ''}`} onClick={() => handleSetCuePoint(deckBAudioRef, setIsPlayingB, setDeckBCurrentTime, setDeckBSeekInput, setDeckBCueTime)}>CUE</button>
                         <button className="cdj-btn play" onClick={() => { 
                           if(deckBAudioRef.current) { 
                             initAudioContextNode(deckBAudioRef.current, audioNodesB);
-                            
-                             if (deckBAudioRef.current.paused && isSyncB && masterDeck === 'A' && deckAAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+
+                            if (deckBAudioRef.current.paused) {
+                              const nextStartTime = deckBCueTime ?? deckBAudioRef.current.currentTime;
+                              deckBAudioRef.current.currentTime = nextStartTime;
+                              setDeckBCurrentTime(nextStartTime);
+                              setDeckBSeekInput(formatPreciseSeconds(nextStartTime));
+
+                              if (isSyncB && masterDeck === 'A' && deckAAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
                                snapSlaveToMaster(deckAAudioRef.current, deckBAudioRef.current, selectedTrackA, selectedTrackB, setDeckBCurrentTime, getSyncLeadSeconds());
                              }
+                            }
 
                             deckBAudioRef.current.paused ? deckBAudioRef.current.play() : deckBAudioRef.current.pause(); 
                             if (audioNodesB.current?.ctx.state === 'suspended') audioNodesB.current.ctx.resume();
@@ -2129,11 +2233,14 @@ export default function App() {
                   style={{display: 'none'}}
                   onPlay={() => setIsPlayingB(true)}
                   onPause={() => setIsPlayingB(false)}
-                  onSeeked={() => setDeckBCurrentTime(deckBAudioRef.current?.currentTime ?? 0)}
+                  onSeeked={() => {
+                    const nextTime = deckBAudioRef.current?.currentTime ?? 0;
+                    setDeckBCurrentTime(nextTime);
+                  }}
                 />
               </div>
               <div className="deck-stats">
-                 <div className="deck-stat-box bpm">
+                <div className="deck-stat-box bpm">
                   <span>BPM</span>
                   <div className="stat-value">
                     <strong>{effectiveBPMB ? effectiveBPMB.toFixed(2) : "--"}</strong>
@@ -2149,6 +2256,28 @@ export default function App() {
                 <div className="deck-stat-box">
                   <span>KEY</span>
                   <strong>{selectedTrackB?.camelotKey || "--"}</strong>
+                </div>
+                <div className="deck-overview-panel">
+                  <div className="deck-overview-header">
+                    <span>Overview</span>
+                    <span>{deckBCueTime !== null ? `Cue @ ${formatPreciseSeconds(deckBCueTime)}` : "No cue set"}</span>
+                  </div>
+                  <MiniWaveform
+                    samples={deckBWaveform}
+                    durationSeconds={selectedTrackB?.durationSeconds || 0}
+                    currentTime={deckBCurrentTime}
+                    isPreviewing={true}
+                    beatMarkers={deckBBeatMarkers}
+                    cueTimeSeconds={deckBCueTime}
+                    fillWidth={true}
+                    height={48}
+                    onSeek={(time) => {
+                      if (!deckBAudioRef.current) return;
+                      deckBAudioRef.current.currentTime = time;
+                      setDeckBCurrentTime(time);
+                      setDeckBSeekInput(formatPreciseSeconds(time));
+                    }}
+                  />
                 </div>
               </div>
             </div>
