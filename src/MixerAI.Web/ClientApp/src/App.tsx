@@ -254,21 +254,24 @@ function buildBeatMarkers(track: Track | null): BeatMarker[] {
     return [];
   }
 
+  // Calculate the first beat index that ensures we start at or around 0s
   const offset = track.beatOffset || 0;
-  const totalBeats = Math.ceil((track.durationSeconds - offset) / beatPeriodSeconds) + 1;
+  const firstIndex = Math.ceil(-offset / beatPeriodSeconds);
   const markers: BeatMarker[] = [];
 
-  for (let index = 0; index < totalBeats; index += 1) {
+  for (let index = firstIndex; ; index += 1) {
     const timelineSeconds = Number((offset + index * beatPeriodSeconds).toFixed(3));
     if (timelineSeconds > track.durationSeconds) {
       break;
     }
 
-    markers.push({
-      relativeSeconds: timelineSeconds,
-      timelineSeconds,
-      isBar: index % 4 === 0,
-    });
+    if (timelineSeconds >= 0) {
+      markers.push({
+        relativeSeconds: timelineSeconds,
+        timelineSeconds,
+        isBar: (index % 4 + 4) % 4 === 0,
+      });
+    }
   }
 
   return markers;
@@ -276,6 +279,145 @@ function buildBeatMarkers(track: Track | null): BeatMarker[] {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function normalizePhase(value: number): number {
+  return ((value % 1) + 1) % 1;
+}
+
+function signedPhaseDelta(masterPhase: number, slavePhase: number): number {
+  let delta = masterPhase - slavePhase;
+  if (delta > 0.5) {
+    delta -= 1;
+  }
+  if (delta < -0.5) {
+    delta += 1;
+  }
+  return delta;
+}
+
+function getBeatTiming(track: Track | null) {
+  if (!track?.bpm || !Number.isFinite(track.bpm) || track.bpm <= 0) {
+    return null;
+  }
+
+  const period = 60 / track.bpm;
+  if (!Number.isFinite(period) || period <= 0) {
+    return null;
+  }
+
+  return {
+    bpm: track.bpm,
+    period,
+    offset: track.beatOffset || 0,
+    durationSeconds: track.durationSeconds || 0,
+  };
+}
+
+function computePhaseAlignedTargetTime(
+  masterTime: number,
+  masterTiming: { period: number; offset: number },
+  slaveTiming: { period: number; offset: number },
+  slaveTime: number,
+) {
+  const masterPhase = normalizePhase((masterTime - masterTiming.offset) / masterTiming.period);
+  const nearestSlaveBeat = Math.round((slaveTime - slaveTiming.offset) / slaveTiming.period);
+  return Math.max(0, slaveTiming.offset + (nearestSlaveBeat * slaveTiming.period) + (masterPhase * slaveTiming.period));
+}
+
+function clampMediaTime(time: number, durationSeconds: number): number {
+  if (!Number.isFinite(time)) {
+    return 0;
+  }
+
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return Math.max(0, time);
+  }
+
+  return clamp(time, 0, Math.max(0, durationSeconds - 0.01));
+}
+
+function syncSlaveToMaster(
+  masterAudio: HTMLAudioElement,
+  slaveAudio: HTMLAudioElement,
+  masterTrack: Track,
+  slaveTrack: Track,
+  setSlaveCurrentTime: (value: number) => void,
+  syncLeadSeconds: number,
+) {
+  const masterTiming = getBeatTiming(masterTrack);
+  const slaveTiming = getBeatTiming(slaveTrack);
+  if (!masterTiming || !slaveTiming) {
+    return;
+  }
+
+  const bpmRatio = masterTiming.bpm / slaveTiming.bpm;
+  const baseRate = bpmRatio * masterAudio.playbackRate;
+
+  if (masterAudio.paused || slaveAudio.paused) {
+    slaveAudio.playbackRate = baseRate;
+    return;
+  }
+
+  const masterRemaining = masterTiming.durationSeconds > 0 ? Math.max(0, masterTiming.durationSeconds - masterAudio.currentTime) : 999;
+  const slaveRemaining = slaveTiming.durationSeconds > 0 ? Math.max(0, slaveTiming.durationSeconds - slaveAudio.currentTime) : 999;
+  const remainingSeconds = Math.min(masterRemaining, slaveRemaining);
+  const releaseWindowSeconds = Math.max(masterTiming.period * 8, slaveTiming.period * 6, 8);
+  const lockStrength = clamp(remainingSeconds / releaseWindowSeconds, 0, 1);
+  const nearEnd = masterRemaining <= Math.max(masterTiming.period * 2, 1.5);
+  const projectedMasterTime = Math.max(0, masterAudio.currentTime + clamp(syncLeadSeconds, 0.008, 0.05));
+
+  const masterPhase = normalizePhase((projectedMasterTime - masterTiming.offset) / masterTiming.period);
+  const slavePhase = normalizePhase((slaveAudio.currentTime - slaveTiming.offset) / slaveTiming.period);
+  const phaseDelta = signedPhaseDelta(masterPhase, slavePhase);
+  const correctionGain = 0.12 + (0.04 * lockStrength);
+  const effectivePhaseDelta = phaseDelta * lockStrength;
+
+  if (!nearEnd && lockStrength > 0.18 && Math.abs(phaseDelta) > 0.05) {
+    const targetTime = clampMediaTime(
+      computePhaseAlignedTargetTime(
+        projectedMasterTime,
+        masterTiming,
+        slaveTiming,
+        slaveAudio.currentTime,
+      ),
+      slaveTiming.durationSeconds,
+    );
+
+    if (Math.abs(slaveAudio.currentTime - targetTime) > 0.004) {
+      slaveAudio.currentTime = targetTime;
+      setSlaveCurrentTime(targetTime);
+    }
+  }
+
+  const rateAdjustment = clamp(1 + (effectivePhaseDelta * correctionGain), 0.99, 1.01);
+  slaveAudio.playbackRate = baseRate * rateAdjustment;
+}
+
+function snapSlaveToMaster(
+  masterAudio: HTMLAudioElement,
+  slaveAudio: HTMLAudioElement,
+  masterTrack: Track,
+  slaveTrack: Track,
+  setSlaveCurrentTime: (value: number) => void,
+  syncLeadSeconds: number,
+) {
+  const masterTiming = getBeatTiming(masterTrack);
+  const slaveTiming = getBeatTiming(slaveTrack);
+  if (!masterTiming || !slaveTiming) {
+    return;
+  }
+
+  const targetTime = clampMediaTime(computePhaseAlignedTargetTime(
+    Math.max(0, masterAudio.currentTime + clamp(syncLeadSeconds, 0.008, 0.05)),
+    masterTiming,
+    slaveTiming,
+    slaveAudio.currentTime,
+  ), slaveTiming.durationSeconds);
+
+  slaveAudio.currentTime = targetTime;
+  setSlaveCurrentTime(targetTime);
+  slaveAudio.playbackRate = (masterTiming.bpm / slaveTiming.bpm) * masterAudio.playbackRate;
 }
 
 function trackStatusTone(status: string): string {
@@ -549,7 +691,7 @@ function downloadBlob(blobUrl: string, fileName: string) {
   link.click();
 }
 
-const PhaseMeter = React.memo(({ audioRef, bpm, isMaster, isSynced }: { audioRef: React.RefObject<HTMLAudioElement | null>, bpm: number, isMaster: boolean, isSynced: boolean }) => {
+const PhaseMeter = React.memo(({ audioRef, bpm, beatOffset, isMaster, isSynced }: { audioRef: React.RefObject<HTMLAudioElement | null>, bpm: number, beatOffset: number, isMaster: boolean, isSynced: boolean }) => {
   const [currentBlock, setCurrentBlock] = useState(0);
 
   useEffect(() => {
@@ -559,7 +701,7 @@ const PhaseMeter = React.memo(({ audioRef, bpm, isMaster, isSynced }: { audioRef
       const audio = audioRef.current;
       if (audio) {
         const period = 60 / (bpm || 120);
-        const phase = (audio.currentTime % period) / period;
+        const phase = normalizePhase((audio.currentTime - beatOffset) / period);
         const block = Math.floor(phase * 4);
         setCurrentBlock(block);
       }
@@ -567,7 +709,7 @@ const PhaseMeter = React.memo(({ audioRef, bpm, isMaster, isSynced }: { audioRef
     };
     update();
     return () => cancelAnimationFrame(animFrame);
-  }, [audioRef, bpm]);
+  }, [audioRef, bpm, beatOffset]);
 
   return (
     <div className="phase-meter">
@@ -648,6 +790,19 @@ export default function App() {
   const [eqB, setEqB] = useState({ high: 0, mid: 0, low: 0, gain: 1 });
   const audioNodesA = useRef<any>(null);
   const audioNodesB = useRef<any>(null);
+  function getSyncLeadSeconds(): number {
+    const latencies = [
+      audioNodesA.current?.ctx?.baseLatency,
+      audioNodesA.current?.ctx?.outputLatency,
+      audioNodesB.current?.ctx?.baseLatency,
+      audioNodesB.current?.ctx?.outputLatency,
+    ]
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0);
+
+    const measuredLatency = latencies.length > 0 ? Math.max(...latencies) : 0.018;
+    return clamp(measuredLatency + 0.008, 0.008, 0.05);
+  }
 
   const initAudioContextNode = (audioElem: HTMLAudioElement, refStorage: any) => {
     if (!audioElem || refStorage.current) return;
@@ -838,118 +993,26 @@ export default function App() {
     let intervalId: any;
 
     const syncProcessor = () => {
-      // Sync Deck A to Master B
-      if (isSyncA && masterDeck === 'B' && selectedTrackA?.bpm && selectedTrackB?.bpm && deckAAudioRef.current && deckBAudioRef.current) {
-        const audioA = deckAAudioRef.current;
-        const audioB = deckBAudioRef.current;
-        
-        if (!audioA.paused && !audioB.paused) {
-          const bpmA = selectedTrackA.bpm;
-          const bpmB = selectedTrackB.bpm;
-          
-          // Find the best multiple (0.5x, 1x, 2x) for slave A to match master B
-          const options = [0.5, 1.0, 2.0];
-          const bestMultiple = options.reduce((prev, curr) => 
-            Math.abs((bpmB * curr) - bpmA) < Math.abs((bpmB * prev) - bpmA) ? curr : prev
-          );
-          
-          const baseRate = (bpmB * bestMultiple) / bpmA;
-          const periodA = 60 / bpmA;
-          const periodB = 60 / bpmB;
-          const offsetA = selectedTrackA.beatOffset || 0;
-          const offsetB = selectedTrackB.beatOffset || 0;
-          
-          // Calculate phases relative to peak-offset (0..1)
-          let phaseA = ((audioA.currentTime - offsetA) % periodA) / periodA;
-          if (phaseA < 0) phaseA += 1;
-          let phaseB = ((audioB.currentTime - offsetB) % periodB) / periodB;
-          if (phaseB < 0) phaseB += 1;
-          
-          let diff = phaseB - phaseA;
-          if (diff > 0.5) diff -= 1;
-          if (diff < -0.5) diff += 1;
-          
-          // Phase pulling: aggression correction
-          const nudge = diff * 0.42; 
-          
-          // Hard snap if drift is significant
-          if (Math.abs(diff) > 0.12) {
-            const targetTime = offsetA + Math.floor((audioA.currentTime - offsetA) / periodA) * periodA + (phaseB * periodA);
-            if (Math.abs(audioA.currentTime - targetTime) > 0.005) {
-              audioA.currentTime = targetTime;
-            }
-          }
+      const audioA = deckAAudioRef.current;
+      const audioB = deckBAudioRef.current;
+      const syncReady = selectedTrackA && selectedTrackB && audioA && audioB;
+      const leadSeconds = getSyncLeadSeconds();
 
-          audioA.playbackRate = clamp(baseRate * (1 + nudge), baseRate * 0.75, baseRate * 1.25);
-        } else {
-          const bpmA = selectedTrackA.bpm;
-          const bpmB = selectedTrackB.bpm;
-          const options = [0.5, 1.0, 2.0];
-          const bestMultiple = options.reduce((prev, curr) => 
-            Math.abs((bpmB * curr) - bpmA) < Math.abs((bpmB * prev) - bpmA) ? curr : prev
-          );
-          audioA.playbackRate = (bpmB * bestMultiple) / bpmA;
-        }
-      } else if (!isSyncA) {
-        if (deckAAudioRef.current) deckAAudioRef.current.playbackRate = 1.0;
+      if (isSyncA && masterDeck === 'B' && syncReady) {
+        syncSlaveToMaster(audioB, audioA, selectedTrackB, selectedTrackA, setDeckACurrentTime, leadSeconds);
+      } else if (audioA && !isSyncA) {
+        audioA.playbackRate = 1.0;
       }
 
-      // Sync Deck B to Master A
-      if (isSyncB && masterDeck === 'A' && selectedTrackA?.bpm && selectedTrackB?.bpm && deckAAudioRef.current && deckBAudioRef.current) {
-        const audioA = deckAAudioRef.current;
-        const audioB = deckBAudioRef.current;
-        
-        if (!audioA.paused && !audioB.paused) {
-          const bpmA = selectedTrackA.bpm;
-          const bpmB = selectedTrackB.bpm;
-
-          // Find the best multiple (0.5x, 1x, 2x) for slave B to match master A
-          const options = [0.5, 1.0, 2.0];
-          const bestMultiple = options.reduce((prev, curr) => 
-            Math.abs((bpmA * curr) - bpmB) < Math.abs((bpmA * prev) - bpmB) ? curr : prev
-          );
-          
-          const baseRate = (bpmA * bestMultiple) / bpmB;
-          const periodA = 60 / bpmA;
-          const periodB = 60 / bpmB;
-          const offsetA = selectedTrackA.beatOffset || 0;
-          const offsetB = selectedTrackB.beatOffset || 0;
-          
-          let phaseA = ((audioA.currentTime - offsetA) % periodA) / periodA;
-          if (phaseA < 0) phaseA += 1;
-          let phaseB = ((audioB.currentTime - offsetB) % periodB) / periodB;
-          if (phaseB < 0) phaseB += 1;
-          
-          let diff = phaseA - phaseB;
-          if (diff > 0.5) diff -= 1;
-          if (diff < -0.5) diff += 1;
-          
-          const nudge = diff * 0.42;
-
-          if (Math.abs(diff) > 0.12) {
-            const targetTime = offsetB + Math.floor((audioB.currentTime - offsetB) / periodB) * periodB + (phaseA * periodB);
-            if (Math.abs(audioB.currentTime - targetTime) > 0.005) {
-              audioB.currentTime = targetTime;
-            }
-          }
-
-          audioB.playbackRate = clamp(baseRate * (1 + nudge), baseRate * 0.75, baseRate * 1.25);
-        } else {
-          const bpmA = selectedTrackA.bpm;
-          const bpmB = selectedTrackB.bpm;
-          const options = [0.5, 1.0, 2.0];
-          const bestMultiple = options.reduce((prev, curr) => 
-            Math.abs((bpmA * curr) - bpmB) < Math.abs((bpmA * prev) - bpmB) ? curr : prev
-          );
-          audioB.playbackRate = (bpmA * bestMultiple) / bpmB;
-        }
-      } else if (!isSyncB) {
-        if (deckBAudioRef.current) deckBAudioRef.current.playbackRate = 1.0;
+      if (isSyncB && masterDeck === 'A' && syncReady) {
+        syncSlaveToMaster(audioA, audioB, selectedTrackA, selectedTrackB, setDeckBCurrentTime, leadSeconds);
+      } else if (audioB && !isSyncB) {
+        audioB.playbackRate = 1.0;
       }
     };
 
     if (isSyncA || isSyncB) {
-      intervalId = setInterval(syncProcessor, 35);
+      intervalId = setInterval(syncProcessor, 16);
     }
     return () => clearInterval(intervalId);
   }, [isSyncA, isSyncB, masterDeck, selectedTrackA, selectedTrackB]);
@@ -1736,18 +1799,9 @@ export default function App() {
                           if(deckAAudioRef.current) { 
                             initAudioContextNode(deckAAudioRef.current, audioNodesA);
                             
-                            // Snap phase on PLAY if SYNC is active and Master exists
-                              const offsetA = selectedTrackA.beatOffset || 0;
-                              const offsetB = selectedTrackB.beatOffset || 0;
-                              const pA = 60 / selectedTrackA.bpm;
-                              const pB = 60 / selectedTrackB.bpm;
-                              
-                              // Phase relative to grid offset
-                              const phaseM = ((deckBAudioRef.current.currentTime - offsetB) % pB) / pB;
-                              const targetTime = offsetA + Math.floor((deckAAudioRef.current.currentTime - offsetA) / pA) * pA + (phaseM * pA);
-                              
-                              deckAAudioRef.current.currentTime = targetTime;
-                              setDeckACurrentTime(targetTime);
+                              if (deckAAudioRef.current && isSyncA && masterDeck === 'B' && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                               snapSlaveToMaster(deckBAudioRef.current, deckAAudioRef.current, selectedTrackB, selectedTrackA, setDeckACurrentTime, getSyncLeadSeconds());
+                             }
 
                             deckAAudioRef.current.paused ? deckAAudioRef.current.play() : deckAAudioRef.current.pause(); 
                             if (audioNodesA.current?.ctx.state === 'suspended') audioNodesA.current.ctx.resume();
@@ -1760,28 +1814,14 @@ export default function App() {
                             const nextMaster = masterDeck === 'A' ? null : 'A';
                             setMasterDeck(nextMaster);
                             if (nextMaster === 'A' && isSyncB && deckAAudioRef.current && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
-                              const offsetA = selectedTrackA.beatOffset || 0;
-                              const offsetB = selectedTrackB.beatOffset || 0;
-                              const pA = 60 / selectedTrackA.bpm;
-                              const pB = 60 / selectedTrackB.bpm;
-                              const phaseM = ((deckAAudioRef.current.currentTime - offsetA) % pA) / pA;
-                              const targetTime = offsetB + Math.floor((deckBAudioRef.current.currentTime - offsetB) / pB) * pB + (phaseM * pB);
-                              deckBAudioRef.current.currentTime = targetTime;
-                              setDeckBCurrentTime(targetTime);
+                              snapSlaveToMaster(deckAAudioRef.current, deckBAudioRef.current, selectedTrackA, selectedTrackB, setDeckBCurrentTime, getSyncLeadSeconds());
                             }
                           }}>MASTER</button>
                           <button className={`sync-btn ${isSyncA ? 'active' : ''}`} onClick={() => {
                             const nextSync = !isSyncA;
                             setIsSyncA(nextSync);
                             if (nextSync && masterDeck === 'B' && deckAAudioRef.current && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
-                              const offsetA = selectedTrackA.beatOffset || 0;
-                              const offsetB = selectedTrackB.beatOffset || 0;
-                              const pA = 60 / selectedTrackA.bpm;
-                              const pB = 60 / selectedTrackB.bpm;
-                              const phaseM = ((deckBAudioRef.current.currentTime - offsetB) % pB) / pB;
-                              const targetTime = offsetA + Math.floor((deckAAudioRef.current.currentTime - offsetA) / pA) * pA + (phaseM * pA);
-                              deckAAudioRef.current.currentTime = targetTime;
-                              setDeckACurrentTime(targetTime);
+                              snapSlaveToMaster(deckBAudioRef.current, deckAAudioRef.current, selectedTrackB, selectedTrackA, setDeckACurrentTime, getSyncLeadSeconds());
                             }
                           }}>SYNC</button>
                         </div>
@@ -1838,6 +1878,7 @@ export default function App() {
                     <PhaseMeter 
                       audioRef={deckAAudioRef}
                       bpm={selectedTrackA?.bpm || 120}
+                      beatOffset={selectedTrackA?.beatOffset || 0}
                       isMaster={masterDeck === 'A'} 
                       isSynced={isSyncA} 
                     />
@@ -2020,17 +2061,9 @@ export default function App() {
                           if(deckBAudioRef.current) { 
                             initAudioContextNode(deckBAudioRef.current, audioNodesB);
                             
-                            // Snap phase on PLAY if SYNC is active and Master exists
-                            if (deckBAudioRef.current.paused && isSyncB && masterDeck === 'A' && deckAAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
-                              const offsetA = selectedTrackA.beatOffset || 0;
-                              const offsetB = selectedTrackB.beatOffset || 0;
-                              const pA = 60 / selectedTrackA.bpm;
-                              const pB = 60 / selectedTrackB.bpm;
-                              const phaseM = ((deckAAudioRef.current.currentTime - offsetA) % pA) / pA;
-                              const targetTime = offsetB + Math.floor((deckBAudioRef.current.currentTime - offsetB) / pB) * pB + (phaseM * pB);
-                              deckBAudioRef.current.currentTime = targetTime;
-                              setDeckBCurrentTime(targetTime);
-                            }
+                             if (deckBAudioRef.current.paused && isSyncB && masterDeck === 'A' && deckAAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
+                               snapSlaveToMaster(deckAAudioRef.current, deckBAudioRef.current, selectedTrackA, selectedTrackB, setDeckBCurrentTime, getSyncLeadSeconds());
+                             }
 
                             deckBAudioRef.current.paused ? deckBAudioRef.current.play() : deckBAudioRef.current.pause(); 
                             if (audioNodesB.current?.ctx.state === 'suspended') audioNodesB.current.ctx.resume();
@@ -2043,24 +2076,14 @@ export default function App() {
                             const nextMaster = masterDeck === 'B' ? null : 'B';
                             setMasterDeck(nextMaster);
                             if (nextMaster === 'B' && isSyncA && deckAAudioRef.current && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
-                              const pA = 60 / selectedTrackA.bpm;
-                              const pB = 60 / selectedTrackB.bpm;
-                              const phaseM = (deckBAudioRef.current.currentTime % pB) / pB;
-                              const targetTime = Math.floor(deckAAudioRef.current.currentTime / pA) * pA + (phaseM * pA);
-                              deckAAudioRef.current.currentTime = targetTime;
-                              setDeckACurrentTime(targetTime);
+                              snapSlaveToMaster(deckBAudioRef.current, deckAAudioRef.current, selectedTrackB, selectedTrackA, setDeckACurrentTime, getSyncLeadSeconds());
                             }
                           }}>MASTER</button>
                           <button className={`sync-btn ${isSyncB ? 'active' : ''}`} onClick={() => {
                             const nextSync = !isSyncB;
                             setIsSyncB(nextSync);
                             if (nextSync && masterDeck === 'A' && deckAAudioRef.current && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
-                              const pA = 60 / selectedTrackA.bpm;
-                              const pB = 60 / selectedTrackB.bpm;
-                              const phaseM = (deckAAudioRef.current.currentTime % pA) / pA;
-                              const targetTime = Math.floor(deckBAudioRef.current.currentTime / pB) * pB + (phaseM * pB);
-                              deckBAudioRef.current.currentTime = targetTime;
-                              setDeckBCurrentTime(targetTime);
+                              snapSlaveToMaster(deckAAudioRef.current, deckBAudioRef.current, selectedTrackA, selectedTrackB, setDeckBCurrentTime, getSyncLeadSeconds());
                             }
                           }}>SYNC</button>
                         </div>
@@ -2117,6 +2140,7 @@ export default function App() {
                     <PhaseMeter 
                       audioRef={deckBAudioRef}
                       bpm={selectedTrackB?.bpm || 120} 
+                      beatOffset={selectedTrackB?.beatOffset || 0}
                       isMaster={masterDeck === 'B'} 
                       isSynced={isSyncB} 
                     />

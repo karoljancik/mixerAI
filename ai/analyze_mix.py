@@ -111,6 +111,8 @@ def main() -> int:
                 "transition_cue_seconds": round(float(transition_plan["transition_cue_seconds"]), 3),
                 "right_start_seconds": round(float(transition_plan["right_start_seconds"]), 3),
                 "transition_style": transition_plan["style"],
+                "left_beat_offset_seconds": round(float(transition_plan.get("left_beat_offset_seconds", 0.0)), 3),
+                "right_beat_offset_seconds": round(float(transition_plan.get("right_beat_offset_seconds", 0.0)), 3),
                 "left_bpm": round(float(transition_plan["left_bpm"]), 3),
                 "right_bpm": round(float(transition_plan["right_bpm"]), 3),
                 "tempo_ratio": round(float(transition_plan["tempo_ratio"]), 6),

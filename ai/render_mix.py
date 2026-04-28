@@ -17,6 +17,7 @@ from beat_sync import (
     combined_transition_rhythm_score,
     compute_tempo_ratio,
     normalize_dnb_bpm,
+    snap_to_beat_grid,
     snap_to_bar_grid,
 )
 from extract_features import extract_segment_features
@@ -209,6 +210,7 @@ def analyze_track_structure(track_path: Path, sample_rate: int) -> dict:
     raw_bpm = float(tempo_value[0]) if hasattr(tempo_value, "__len__") else float(tempo_value)
     bpm = normalize_dnb_bpm(raw_bpm)
     beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop_length)
+    beat_offset_seconds = float(beat_times[0]) if beat_times.size > 0 else 0.0
 
     if beat_times.size < 24:
         fallback_period = beat_period_seconds(bpm if bpm > 0 else 174.0)
@@ -255,6 +257,7 @@ def analyze_track_structure(track_path: Path, sample_rate: int) -> dict:
         "raw_bpm": raw_bpm,
         "bpm": bpm if bpm > 0 else 174.0,
         "beat_period_seconds": beat_period_seconds(bpm if bpm > 0 else 174.0),
+        "beat_offset_seconds": beat_offset_seconds,
         "beat_profile": beat_profile,
         "drop_cues": extract_drop_cues(beat_profile, duration_seconds),
         "exit_cues": extract_exit_cues(beat_profile, duration_seconds),
@@ -369,6 +372,8 @@ def build_transition_plan(
 ) -> dict:
     left_bpm = float(structure_a.get("bpm") or candidate["left_bpm"])
     right_bpm = float(structure_b.get("bpm") or candidate["right_bpm"])
+    left_beat_offset = float(structure_a.get("beat_offset_seconds", 0.0) or 0.0)
+    right_beat_offset = float(structure_b.get("beat_offset_seconds", 0.0) or 0.0)
     tempo_ratio = float(compute_tempo_ratio(right_bpm, left_bpm))
     beat_period_a = max(beat_period_seconds(left_bpm), 0.333)
     beat_period_b = max(beat_period_seconds(right_bpm), 0.333)
@@ -382,14 +387,14 @@ def build_transition_plan(
     ]
 
     exit_cues = structure_a.get("exit_cues") or [{
-        "time": snap_to_bar_grid(base_overlay + (16 * beat_period_a), left_bpm),
+        "time": snap_to_bar_grid(base_overlay + (16 * beat_period_a), left_bpm, beat_offset_seconds=left_beat_offset),
         "score": 0.35,
         "energy_before": 0.55,
         "energy_after": 0.32,
         "decay": 0.23,
     }]
     drop_cues = structure_b.get("drop_cues") or [{
-        "time": snap_to_bar_grid(base_right_start + (16 * beat_period_b), right_bpm),
+        "time": snap_to_bar_grid(base_right_start + (16 * beat_period_b), right_bpm, beat_offset_seconds=right_beat_offset),
         "score": 0.35,
         "energy_before": 0.3,
         "energy_after": 0.7,
@@ -482,19 +487,24 @@ def build_transition_plan(
             "tail_beats": 8,
         }
 
-    best_plan["overlay_start_seconds"] = round(snap_to_bar_grid(best_plan["overlay_start_seconds"], left_bpm), 3)
+    best_plan["overlay_start_seconds"] = round(
+        snap_to_bar_grid(best_plan["overlay_start_seconds"], left_bpm, beat_offset_seconds=left_beat_offset),
+        3,
+    )
     best_plan["transition_cue_seconds"] = round(
         best_plan["overlay_start_seconds"] + best_plan["target_entry_lead_seconds"],
         3,
     )
     best_plan["right_start_seconds"] = round(
-        snap_to_bar_grid(best_plan["right_start_seconds"], right_bpm),
+        snap_to_bar_grid(best_plan["right_start_seconds"], right_bpm, beat_offset_seconds=right_beat_offset),
         3,
     )
     best_plan["right_drop_seconds"] = round(
         best_plan["right_start_seconds"] + best_plan["source_entry_lead_seconds"],
         3,
     )
+    best_plan["left_beat_offset_seconds"] = round(left_beat_offset, 3)
+    best_plan["right_beat_offset_seconds"] = round(right_beat_offset, 3)
     return best_plan
 
 
@@ -640,7 +650,7 @@ def choose_best_transition(
     best_candidate["probability"] = float(reranked_probabilities[best_index])
     best_candidate["model_probability"] = float(probabilities[best_index])
     best_candidate["overlay_start_seconds"] = (
-        snap_to_bar_grid(best_candidate["left_start_seconds"], best_candidate["left_bpm"])
+        snap_to_beat_grid(best_candidate["left_start_seconds"], best_candidate["left_bpm"])
         if preserve_track_a_from_start
         else best_candidate["left_start_seconds"]
     )
@@ -726,7 +736,7 @@ def choose_best_transition_without_model(
                 "probability": float(combined_score),
                 "model_probability": 0.0,
                 "overlay_start_seconds": (
-                    snap_to_bar_grid(left_start_seconds, left_bpm)
+                    snap_to_beat_grid(left_start_seconds, left_bpm)
                     if preserve_track_a_from_start
                     else left_start_seconds
                 ),
@@ -741,8 +751,8 @@ def choose_best_transition_without_model(
 
 def refine_transition_candidate(candidate: dict) -> dict:
     refined = dict(candidate)
-    overlay_start = snap_to_bar_grid(float(refined["overlay_start_seconds"]), float(refined["left_bpm"]))
-    right_start = snap_to_bar_grid(float(refined["right_start_seconds"]), float(refined["right_bpm"]))
+    overlay_start = snap_to_beat_grid(float(refined["overlay_start_seconds"]), float(refined["left_bpm"]))
+    right_start = snap_to_beat_grid(float(refined["right_start_seconds"]), float(refined["right_bpm"]))
     beat_period = beat_period_seconds(float(refined["right_bpm"]))
     if beat_period <= 0:
         refined["overlay_start_seconds"] = overlay_start
@@ -802,9 +812,11 @@ def render_mix(
     overlay_seconds = max(crossfade_seconds, int(overlay_seconds))
     track_b_tail_seconds = max(1, int(track_b_tail_seconds))
 
-    snapped_overlay_start = snap_to_bar_grid(overlay_start_seconds, left_bpm)
-    snapped_left_start = snap_to_bar_grid(left_start_seconds, left_bpm)
-    snapped_right_start = snap_to_bar_grid(right_start_seconds, right_bpm)
+    left_beat_offset = float(transition_plan.get("left_beat_offset_seconds", 0.0) or 0.0)
+    right_beat_offset = float(transition_plan.get("right_beat_offset_seconds", 0.0) or 0.0)
+    snapped_overlay_start = snap_to_bar_grid(overlay_start_seconds, left_bpm, beat_offset_seconds=left_beat_offset)
+    snapped_left_start = snap_to_bar_grid(left_start_seconds, left_bpm, beat_offset_seconds=left_beat_offset)
+    snapped_right_start = snap_to_bar_grid(right_start_seconds, right_bpm, beat_offset_seconds=right_beat_offset)
     transition_style = str(transition_plan.get("style", "blend"))
     transition_cue_seconds = float(transition_plan.get("transition_cue_seconds", snapped_overlay_start + overlay_seconds))
     source_entry_lead_seconds = max(0.0, float(transition_plan.get("source_entry_lead_seconds", 0.0)))

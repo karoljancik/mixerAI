@@ -57,7 +57,18 @@ def beat_period_seconds(bpm: float) -> float:
     return 60.0 / normalized
 
 
-def snap_to_bar_grid(seconds: float, bpm: float, beats_per_bar: int = 4) -> float:
+def snap_to_beat_grid(seconds: float, bpm: float, beat_offset_seconds: float = 0.0) -> float:
+    period = beat_period_seconds(bpm)
+    if period <= 0:
+        return seconds
+
+    offset = float(beat_offset_seconds)
+    beat_index = round((seconds - offset) / period)
+    snapped = offset + (beat_index * period)
+    return round(float(max(0.0, snapped)), 3)
+
+
+def snap_to_bar_grid(seconds: float, bpm: float, beats_per_bar: int = 4, beat_offset_seconds: float = 0.0) -> float:
     period = beat_period_seconds(bpm)
     if period <= 0:
         return seconds
@@ -66,7 +77,10 @@ def snap_to_bar_grid(seconds: float, bpm: float, beats_per_bar: int = 4) -> floa
     if bar_duration <= 0:
         return seconds
 
-    return round(float(round(seconds / bar_duration) * bar_duration), 3)
+    offset = float(beat_offset_seconds)
+    bar_index = round((seconds - offset) / bar_duration)
+    snapped = offset + (bar_index * bar_duration)
+    return round(float(max(0.0, snapped)), 3)
 
 
 def bpm_distance_score(left_bpm: float, right_bpm: float) -> float:

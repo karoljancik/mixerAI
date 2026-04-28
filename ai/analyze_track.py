@@ -172,8 +172,11 @@ def analyze_track(file_path: str, output_json: str) -> None:
 
     duration = librosa.get_duration(y=y, sr=sr)
     
+    hop_length = 512
+
     # Robust BPM and Beat Track Detection
-    tempo_val, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+    onset_envelope = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+    tempo_val, beat_frames = librosa.beat.beat_track(onset_envelope=onset_envelope, sr=sr, hop_length=hop_length)
     # Ensure tempo is a float (handling both scalar and array returns)
     tempo_float = float(tempo_val[0]) if hasattr(tempo_val, "__len__") else float(tempo_val)
     
@@ -182,8 +185,8 @@ def analyze_track(file_path: str, output_json: str) -> None:
     key_name, camelot = get_key_from_chroma(chroma)
 
     # Precision Beat Alignment
-    beat_times = librosa.frames_to_time(beat_frames, sr=sr)
-    beat_offset = float(beat_times[0]) if len(beat_times) > 0 else 0.0
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=hop_length)
+    beat_offset = estimate_beat_offset(beat_times, onset_envelope, sr, hop_length, duration, tempo_float)
 
     # Waveform Summary
     waveform = extract_multiband_waveform(y, sr)
@@ -201,6 +204,51 @@ def analyze_track(file_path: str, output_json: str) -> None:
         json.dump(result, output_file)
 
     print("Analysis complete.")
+
+
+def estimate_beat_offset(
+    beat_times: np.ndarray,
+    onset_envelope: np.ndarray,
+    sr: int,
+    hop_length: int,
+    duration: float,
+    tempo: float,
+) -> float:
+    if beat_times.size == 0 or onset_envelope.size == 0 or tempo <= 0:
+        return 0.0
+
+    beat_period = 60.0 / tempo
+    if beat_period <= 0:
+        return float(beat_times[0]) if beat_times.size > 0 else 0.0
+
+    # Search a small window around the first detected beat and pick the offset
+    # that best aligns with the onset envelope over the next few beats.
+    first_beat = float(beat_times[0])
+    search_window = min(beat_period * 0.5, 0.35)
+    candidate_offsets = np.linspace(first_beat - search_window, first_beat + search_window, 81)
+    beat_horizon = min(32, max(8, int(duration / beat_period) + 1))
+
+    best_offset = first_beat
+    best_score = -1.0
+
+    for candidate in candidate_offsets:
+        if candidate < -beat_period or candidate > duration:
+            continue
+
+        expected_beats = candidate + (np.arange(beat_horizon, dtype=np.float32) * beat_period)
+        expected_beats = expected_beats[expected_beats <= duration]
+        if expected_beats.size == 0:
+            continue
+
+        frames = librosa.time_to_frames(expected_beats, sr=sr, hop_length=hop_length)
+        frames = np.clip(frames, 0, max(0, onset_envelope.size - 1))
+        score = float(np.mean(onset_envelope[frames]))
+
+        if score > best_score:
+            best_score = score
+            best_offset = float(candidate)
+
+    return round(max(0.0, best_offset), 3)
 
 
 if __name__ == "__main__":
