@@ -74,6 +74,25 @@ function parsePreciseSecondsInput(value: string): number | null {
     return null;
   }
 
+  // Handle M:SS.mmm or H:M:S format
+  if (normalized.includes(":")) {
+    const parts = normalized.split(":");
+    if (parts.length === 2) {
+      const minutes = parseFloat(parts[0]);
+      const seconds = parseFloat(parts[1]);
+      if (Number.isFinite(minutes) && Number.isFinite(seconds)) {
+        return (minutes * 60) + seconds;
+      }
+    } else if (parts.length === 3) {
+      const hours = parseFloat(parts[0]);
+      const minutes = parseFloat(parts[1]);
+      const seconds = parseFloat(parts[2]);
+      if (Number.isFinite(hours) && Number.isFinite(minutes) && Number.isFinite(seconds)) {
+        return (hours * 3600) + (minutes * 60) + seconds;
+      }
+    }
+  }
+
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -960,8 +979,8 @@ export default function App() {
   const [useManualRenderPlan, setUseManualRenderPlan] = useState(false);
   const [manualOverlayStartSeconds, setManualOverlayStartSeconds] = useState(24);
   const [manualRightStartSeconds, setManualRightStartSeconds] = useState(32);
-  const [manualOverlayStartInput, setManualOverlayStartInput] = useState("24.000");
-  const [manualRightStartInput, setManualRightStartInput] = useState("32.000");
+  const [manualOverlayStartInput, setManualOverlayStartInput] = useState("0:24.000");
+  const [manualRightStartInput, setManualRightStartInput] = useState("0:32.000");
   const [renderPending, setRenderPending] = useState(false);
   const [renderedMixUrl, setRenderedMixUrl] = useState<string | null>(null);
   const [renderedMixName, setRenderedMixName] = useState("mixerai-transition-reference.mp3");
@@ -986,8 +1005,8 @@ export default function App() {
   const [deckBCurrentTime, setDeckBCurrentTime] = useState(0);
   const [deckACueTime, setDeckACueTime] = useState<number | null>(null);
   const [deckBCueTime, setDeckBCueTime] = useState<number | null>(null);
-  const [deckASeekInput, setDeckASeekInput] = useState("0.000");
-  const [deckBSeekInput, setDeckBSeekInput] = useState("0.000");
+  const [deckASeekInput, setDeckASeekInput] = useState("0:00.000");
+  const [deckBSeekInput, setDeckBSeekInput] = useState("0:00.000");
   const [previewTrackId, setPreviewTrackId] = useState<string | null>(null);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0);
@@ -1434,8 +1453,8 @@ export default function App() {
     setUseManualRenderPlan(true);
     setManualOverlayStartSeconds(analysisResult.recommendation.overlayStartSeconds);
     setManualRightStartSeconds(analysisResult.recommendation.rightStartSeconds);
-    setManualOverlayStartInput(formatPreciseSeconds(analysisResult.recommendation.overlayStartSeconds));
-    setManualRightStartInput(formatPreciseSeconds(analysisResult.recommendation.rightStartSeconds));
+    setManualOverlayStartInput(formatPreciseClock(analysisResult.recommendation.overlayStartSeconds));
+    setManualRightStartInput(formatPreciseClock(analysisResult.recommendation.rightStartSeconds));
     setNotice("Analyzer timings loaded into the manual render controls.");
   }
 
@@ -1520,18 +1539,18 @@ export default function App() {
 
     setManualOverlayStartSeconds(nextOverlay);
     setManualRightStartSeconds(nextRight);
-    setManualOverlayStartInput(formatPreciseSeconds(nextOverlay));
-    setManualRightStartInput(formatPreciseSeconds(nextRight));
+    setManualOverlayStartInput(formatPreciseClock(nextOverlay));
+    setManualRightStartInput(formatPreciseClock(nextRight));
   }, [overlayMax, rightStartMax]);
 
   useEffect(() => {
     setDeckACurrentTime(0);
-    setDeckASeekInput("0.000");
+    setDeckASeekInput("0:00.000");
   }, [selectedDeckAId]);
 
   useEffect(() => {
     setDeckBCurrentTime(0);
-    setDeckBSeekInput("0.000");
+    setDeckBSeekInput("0:00.000");
   }, [selectedDeckBId]);
 
   function commitManualOverlayStartInput() {
@@ -1539,7 +1558,7 @@ export default function App() {
     const parsed = parsePreciseSecondsInput(manualOverlayStartInput);
     const nextValue = clamp(parsed ?? manualOverlayStartSeconds, 0, overlayMax);
     setManualOverlayStartSeconds(nextValue);
-    setManualOverlayStartInput(formatPreciseSeconds(nextValue));
+    setManualOverlayStartInput(formatPreciseClock(nextValue));
   }
 
   function commitManualRightStartInput() {
@@ -1547,7 +1566,7 @@ export default function App() {
     const parsed = parsePreciseSecondsInput(manualRightStartInput);
     const nextValue = clamp(parsed ?? manualRightStartSeconds, 0, rightStartMax);
     setManualRightStartSeconds(nextValue);
-    setManualRightStartInput(formatPreciseSeconds(nextValue));
+    setManualRightStartInput(formatPreciseClock(nextValue));
   }
 
   function applyDeckSeekPosition(
@@ -1571,7 +1590,7 @@ export default function App() {
 
     audio.currentTime = nextValue;
     setCurrentTime(nextValue);
-    setInputValue(formatPreciseSeconds(nextValue));
+    setInputValue(formatPreciseClock(nextValue));
   }
 
   function handleSetCuePoint(
@@ -1591,7 +1610,7 @@ export default function App() {
     setPlaying(false);
     setCueTime(nextCueTime);
     setCurrentTime(nextCueTime);
-    setInputValue(formatPreciseSeconds(nextCueTime));
+    setInputValue(formatPreciseClock(nextCueTime));
   }
 
   function handleUseCurrentDeckTimesForRender() {
@@ -1601,8 +1620,8 @@ export default function App() {
     setUseManualRenderPlan(true);
     setManualOverlayStartSeconds(nextOverlay);
     setManualRightStartSeconds(nextRight);
-    setManualOverlayStartInput(formatPreciseSeconds(nextOverlay));
-    setManualRightStartInput(formatPreciseSeconds(nextRight));
+    setManualOverlayStartInput(formatPreciseClock(nextOverlay));
+    setManualRightStartInput(formatPreciseClock(nextRight));
   }
 
   function handleApplyCopilotPlan() {
@@ -1612,8 +1631,8 @@ export default function App() {
     setUseManualRenderPlan(true);
     setManualOverlayStartSeconds(nextOverlay);
     setManualRightStartSeconds(nextRight);
-    setManualOverlayStartInput(formatPreciseSeconds(nextOverlay));
-    setManualRightStartInput(formatPreciseSeconds(nextRight));
+    setManualOverlayStartInput(formatPreciseClock(nextOverlay));
+    setManualRightStartInput(formatPreciseClock(nextRight));
     setNotice("Copilot cue plan loaded into the render controls.");
   }
 
@@ -1868,7 +1887,7 @@ export default function App() {
                               const nextStartTime = deckACueTime ?? deckAAudioRef.current.currentTime;
                               deckAAudioRef.current.currentTime = nextStartTime;
                               setDeckACurrentTime(nextStartTime);
-                              setDeckASeekInput(formatPreciseSeconds(nextStartTime));
+                              setDeckASeekInput(formatPreciseClock(nextStartTime));
 
                               if (isSyncA && masterDeck === 'B' && deckBAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
                                snapSlaveToMaster(deckBAudioRef.current, deckAAudioRef.current, selectedTrackB, selectedTrackA, setDeckACurrentTime, getSyncLeadSeconds());
@@ -1909,7 +1928,7 @@ export default function App() {
                       <div className="precision-row">
                         <span className="precision-label">Live</span>
                         <TimeDisplay audioRef={deckAAudioRef} />
-                        <button type="button" className="action-btn" onClick={() => setDeckASeekInput(formatPreciseSeconds(deckAAudioRef.current?.currentTime || 0))}>NOW</button>
+                        <button type="button" className="action-btn" onClick={() => setDeckASeekInput(formatPreciseClock(deckAAudioRef.current?.currentTime || 0))}>NOW</button>
                       </div>
                       <div className="precision-row">
                         <span className="precision-label">Jump To</span>
@@ -1949,7 +1968,7 @@ export default function App() {
                 <div className="deck-overview-panel">
                   <div className="deck-overview-header">
                     <span>Overview</span>
-                    <span>{deckACueTime !== null ? `Cue @ ${formatPreciseSeconds(deckACueTime)}` : "No cue set"}</span>
+                    <span>{deckACueTime !== null ? `Cue @ ${formatPreciseClock(deckACueTime)}` : "No cue set"}</span>
                   </div>
                   <MiniWaveform
                     samples={deckAWaveform}
@@ -1964,7 +1983,7 @@ export default function App() {
                       if (!deckAAudioRef.current) return;
                       deckAAudioRef.current.currentTime = time;
                       setDeckACurrentTime(time);
-                      setDeckASeekInput(formatPreciseSeconds(time));
+                      setDeckASeekInput(formatPreciseClock(time));
                     }}
                   />
                 </div>
@@ -2059,7 +2078,7 @@ export default function App() {
                     <button type="button" className="action-btn" onClick={() => {
                       const nextValue = clamp(deckACurrentTime, 0, overlayMax);
                       setManualOverlayStartSeconds(nextValue);
-                      setManualOverlayStartInput(formatPreciseSeconds(nextValue));
+                      setManualOverlayStartInput(formatPreciseClock(nextValue));
                     }}>A NOW</button>
                   </div>
                   <div className="precision-row">
@@ -2081,11 +2100,11 @@ export default function App() {
                     <button type="button" className="action-btn" onClick={() => {
                       const nextValue = clamp(deckBCurrentTime, 0, rightStartMax);
                       setManualRightStartSeconds(nextValue);
-                      setManualRightStartInput(formatPreciseSeconds(nextValue));
+                      setManualRightStartInput(formatPreciseClock(nextValue));
                     }}>B NOW</button>
                   </div>
                   <div className="precision-row">
-                    <span className="precision-hint">Presnost: 0.001 s. Hodnoty sa pri rendere posielaju ako desatinne sekundy.</span>
+                    <span className="precision-hint">Presnosť: 0.001 s. Podporuje formát M:SS.mmm alebo sekundy.</span>
                   </div>
                   <div className="precision-row">
                     <button type="button" className="secondary-button" onClick={() => handleUseCurrentDeckTimesForRender()}>
@@ -2162,7 +2181,7 @@ export default function App() {
                               const nextStartTime = deckBCueTime ?? deckBAudioRef.current.currentTime;
                               deckBAudioRef.current.currentTime = nextStartTime;
                               setDeckBCurrentTime(nextStartTime);
-                              setDeckBSeekInput(formatPreciseSeconds(nextStartTime));
+                              setDeckBSeekInput(formatPreciseClock(nextStartTime));
 
                               if (isSyncB && masterDeck === 'A' && deckAAudioRef.current && selectedTrackA?.bpm && selectedTrackB?.bpm) {
                                snapSlaveToMaster(deckAAudioRef.current, deckBAudioRef.current, selectedTrackA, selectedTrackB, setDeckBCurrentTime, getSyncLeadSeconds());
@@ -2203,7 +2222,7 @@ export default function App() {
                       <div className="precision-row">
                         <span className="precision-label">Live</span>
                         <TimeDisplay audioRef={deckBAudioRef} />
-                        <button type="button" className="action-btn" onClick={() => setDeckBSeekInput(formatPreciseSeconds(deckBAudioRef.current?.currentTime || 0))}>NOW</button>
+                        <button type="button" className="action-btn" onClick={() => setDeckBSeekInput(formatPreciseClock(deckBAudioRef.current?.currentTime || 0))}>NOW</button>
                       </div>
                       <div className="precision-row">
                         <span className="precision-label">Jump To</span>
@@ -2260,7 +2279,7 @@ export default function App() {
                 <div className="deck-overview-panel">
                   <div className="deck-overview-header">
                     <span>Overview</span>
-                    <span>{deckBCueTime !== null ? `Cue @ ${formatPreciseSeconds(deckBCueTime)}` : "No cue set"}</span>
+                    <span>{deckBCueTime !== null ? `Cue @ ${formatPreciseClock(deckBCueTime)}` : "No cue set"}</span>
                   </div>
                   <MiniWaveform
                     samples={deckBWaveform}
@@ -2275,7 +2294,7 @@ export default function App() {
                       if (!deckBAudioRef.current) return;
                       deckBAudioRef.current.currentTime = time;
                       setDeckBCurrentTime(time);
-                      setDeckBSeekInput(formatPreciseSeconds(time));
+                      setDeckBSeekInput(formatPreciseClock(time));
                     }}
                   />
                 </div>
